@@ -24,3 +24,7 @@ Thumbs.db
 # 编辑器
 .vscode/
 .idea/
+
+# WorkBuddy 应用发布标记与大文件缓存
+.wbapp_*.genie
+.workbuddy/
