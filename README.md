@@ -21,6 +21,10 @@ Nucleus 不是一个套壳聊天框。它把「Agent 生成应用」拆成一条
                             └────────────────────────────────┘
 ```
 
+![工作台](docs/screenshots/studio.png)
+
+<sub>左：对话与文件流；右：生成的应用在沙箱里真实运行，可切换代码 / 版本视图。</sub>
+
 ---
 
 ## 快速开始
@@ -44,6 +48,8 @@ npm start          # 自动 build，监听 http://localhost:8787
 ---
 
 ## 能做什么
+
+![首页](docs/screenshots/home.png)
 
 | 能力 | 说明 |
 | --- | --- |
