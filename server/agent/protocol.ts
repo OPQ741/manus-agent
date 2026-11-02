@@ -173,7 +173,7 @@ export class ProtocolParser {
       this.flushFileText(this.buffer)
       this.buffer = ''
       this.warn('文件未闭合，已按已收到的内容收尾：' + this.currentPath)
-      this.closeFile()
+      this.closeFile(true)
     } else if (this.mode === 'plan') {
       this.planBuf += this.buffer
       this.buffer = ''
@@ -231,7 +231,13 @@ export class ProtocolParser {
     this.events.push({ type: 'file_delta', path: this.currentPath, chunk: text })
   }
 
-  private closeFile() {
+  /**
+   * 收尾一个文件。
+   * truncated=true 表示这个文件**没有正常闭合**（流断了 / 模型忘了写 </file>），
+   * 内容是"已收到的部分"。调用方据此区分「写完了」与「只写了一半」——
+   * 前者可安全保留，后者在中断时应回退到旧版本。
+   */
+  private closeFile(truncated = false) {
     const path = this.currentPath
     if (!path) {
       this.mode = 'outside'
@@ -240,7 +246,7 @@ export class ProtocolParser {
     this.currentPath = null
     this.mode = 'outside'
     const content = trimEdgeNewline(stripFence(this.currentContent))
-    this.events.push({ type: 'file_end', path, lines: countLines(content), content })
+    this.events.push({ type: 'file_end', path, lines: countLines(content), content, truncated })
     this.currentContent = ''
     this.currentStarted = false
     this.options.onFile?.(path, content)
@@ -315,7 +321,7 @@ export class ProtocolParser {
       const path = parsePathAttr(m[1] ?? '')
       this.buffer = this.buffer.slice(m[0].length)
       this.warn('上一个文件未闭合，已自动收尾')
-      this.closeFile()
+      this.closeFile(true)
       if (path) this.openFile(path)
     }
     return true

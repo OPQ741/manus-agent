@@ -166,6 +166,69 @@ try {
     await mobile.close()
   })
 
+  await step('E2E-11 生成中停止会保留已完成的文件', async () => {
+    const projectId = page.url().split('/studio/')[1]?.split('?')[0]
+    const tag = Date.now().toString(36).slice(-4)
+    const prompt = `名字叫「E2E 概览 ${tag}」，主色换成紫色，并加一个本月概览区块`
+
+    // 在 Node 侧发起生成并逐帧读 SSE：精确地在"第一个文件刚写完"那一刻喊停。
+    // 为什么不放在浏览器里轮询 DOM：整轮生成只有 ~0.7s，轮询延迟就能错过窗口，
+    // 这种 flaky 测试比没有测试更糟。
+    const response = await fetch(`${BASE}/api/projects/${projectId}/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt, engine: 'local' }),
+    })
+    assert.equal(response.status, 200)
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let stopped = false
+    let partial = false
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let index
+      while ((index = buffer.indexOf('\n\n')) >= 0) {
+        const block = buffer.slice(0, index)
+        buffer = buffer.slice(index + 2)
+        for (const line of block.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith('data:')) continue
+          let event
+          try {
+            event = JSON.parse(trimmed.slice(5).trim())
+          } catch {
+            continue
+          }
+          if (event.type === 'file_end' && !stopped) {
+            stopped = true
+            await fetch(`${BASE}/api/projects/${projectId}/stop`, { method: 'POST' })
+          }
+          if (event.type === 'done' && event.partial) partial = true
+        }
+      }
+    }
+    assert.ok(partial, '没有收到 partial 的 done 事件')
+
+    // 界面上能看到这个「中断保留」的版本
+    await page.reload({ waitUntil: 'networkidle' })
+    await page.getByRole('tab', { name: /版本/ }).click()
+    const kept = page.locator('.version-item', { hasText: '中断保留' })
+    await kept.first().waitFor({ timeout: 10000 })
+    assert.ok((await kept.count()) >= 1, '版本列表里没有「中断保留」条目')
+
+    // 顺带确认界面上的停止按钮：出现、且文案说清楚会保留什么
+    const chat = page.locator('.chat-input textarea')
+    await chat.fill('再加一句说明文字')
+    await page.getByRole('button', { name: /^发送$/ }).click()
+    const stop = page.getByRole('button', { name: /保留已完成文件/ })
+    await stop.waitFor({ state: 'visible', timeout: 10000 })
+    await page.getByRole('button', { name: /^发送$/ }).waitFor({ state: 'visible', timeout: 30000 })
+  })
+
   console.log(`\n全部 ${results.length} 步通过 ✓`)
   if (consoleErrors.length) console.log('控制台错误（非阻断）：', consoleErrors.slice(0, 5))
   await browser.close()

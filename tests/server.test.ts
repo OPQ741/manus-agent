@@ -276,6 +276,13 @@ describe('HTTP · 设置与云模型链路', () => {
     expect(body.apiKeyMasked).toBe('sk-****7890')
     expect(body.baseUrl).toBe('https://api.example.com/v1')
     expect(body.cloudReady).toBe(true)
+
+    // 复原：设置是全局的，不还原会污染后面的用例（默认引擎被改成 cloud）
+    await fetch(base + '/api/settings', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ engine: 'local' }),
+    })
   })
 
   it('拒绝内网模型地址（SSRF 防护）', async () => {
@@ -326,5 +333,97 @@ describe('HTTP · 设置与云模型链路', () => {
     expect(detail.project.version).toBe(0)
     expect(detail.messages.some((message) => message.kind === 'error')).toBe(true)
     mode = 'ok'
+  })
+})
+
+describe('HTTP · 我的项目与中断保留', () => {
+  it('IT-16 ?mine=1 只返回该访客创建的项目', async () => {
+    const created = await fetch(base + '/api/projects', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-visitor': 'visitor-a' },
+      body: JSON.stringify({ prompt: '访客 A 的项目' }),
+    })
+    expect(created.status).toBe(201)
+    const body = (await created.json()) as { project: { id: string } }
+
+    const mine = (await (
+      await fetch(base + '/api/projects?mine=1', { headers: { 'x-visitor': 'visitor-a' } })
+    ).json()) as { projects: { id: string; createdBy: string }[] }
+    expect(mine.projects.some((item) => item.id === body.project.id)).toBe(true)
+    expect(mine.projects.every((item) => item.createdBy === 'visitor-a')).toBe(true)
+
+    const other = (await (
+      await fetch(base + '/api/projects?mine=1', { headers: { 'x-visitor': 'visitor-b' } })
+    ).json()) as { projects: { id: string }[] }
+    expect(other.projects.some((item) => item.id === body.project.id)).toBe(false)
+  })
+
+  it('IT-17 停止生成后保留已完成的文件并落一个新版本', async () => {
+    const prompt = '做一个待办清单，可以勾选完成'
+    const project = await createProject(prompt)
+
+    const response = await fetch(base + `/api/projects/${project.id}/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt, engine: 'local' }),
+    })
+    expect(response.status).toBe(200)
+
+    const events: AgentEvent[] = []
+    const reader = response.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    const reading = (async () => {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let index: number
+        while ((index = buffer.indexOf('\n\n')) >= 0) {
+          const block = buffer.slice(0, index)
+          buffer = buffer.slice(index + 2)
+          for (const line of block.split('\n')) {
+            const trimmed = line.trim()
+            if (!trimmed.startsWith('data:')) continue
+            try {
+              events.push(JSON.parse(trimmed.slice(5).trim()) as AgentEvent)
+            } catch {
+              /* 忽略坏帧 */
+            }
+          }
+        }
+      }
+    })()
+
+    // 等第一个文件真正写完（收到 file_end），再喊停
+    const deadline = Date.now() + 15_000
+    while (!events.some((event) => event.type === 'file_end') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 15))
+    }
+    expect(events.some((event) => event.type === 'file_end')).toBe(true)
+
+    const stopped = await post(`/api/projects/${project.id}/stop`, {})
+    expect(stopped.status).toBe(200)
+
+    await reading
+
+    const done = events.find((event) => event.type === 'done')
+    expect(done).toBeTruthy()
+    expect(done?.type === 'done' && done.partial).toBe(true)
+
+    const detail = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail
+    expect(detail.project.files.length).toBeGreaterThan(0)
+    expect(detail.project.version).toBe(1)
+    // 保留下来的一定是完整闭合的文件，不能是写了一半的
+    for (const file of detail.project.files) {
+      expect(file.content.trim().length).toBeGreaterThan(0)
+    }
+    expect(detail.messages.some((message) => message.content.includes('已停止'))).toBe(true)
+  })
+
+  it('IT-18 没有进行中的生成时停止接口给出明确错误', async () => {
+    const project = await createProject('空闲项目')
+    const stopped = await post(`/api/projects/${project.id}/stop`, {})
+    expect(stopped.status).toBe(409)
   })
 })

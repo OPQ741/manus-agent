@@ -180,3 +180,27 @@ describe('protocol · 工具函数', () => {
     expect(plan?.files[0]?.path).toBe('index.html')
   })
 })
+
+describe('protocol · 截断标记（中断保留的基础）', () => {
+  it('UT-PROTO-18 正常闭合的文件不是 truncated', () => {
+    const events = parseProtocol('<file path="a.html">\nhello\n</file>')
+    const file = events.find((event) => event.type === 'file_end')
+    expect(file?.type === 'file_end' && file.truncated).toBeFalsy()
+  })
+
+  it('UT-PROTO-19 未闭合的文件标记为 truncated', () => {
+    const events = parseProtocol('<file path="a.html">\nhello world')
+    const file = events.find((event) => event.type === 'file_end')
+    expect(file?.type === 'file_end' && file.truncated).toBe(true)
+    expect(file?.type === 'file_end' && file.content).toContain('hello world')
+  })
+
+  it('UT-PROTO-20 忘记闭合直接开新文件，前一个标记为 truncated', () => {
+    const events = parseProtocol('<file path="a.html">\nAAA\n<file path="b.html">\nBBB\n</file>')
+    const files = events.filter((event) => event.type === 'file_end')
+    const a = files.find((event) => event.type === 'file_end' && event.path === 'a.html')
+    const b = files.find((event) => event.type === 'file_end' && event.path === 'b.html')
+    expect(a?.type === 'file_end' && a.truncated).toBe(true)
+    expect(b?.type === 'file_end' && b.truncated).toBeFalsy()
+  })
+})

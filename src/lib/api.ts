@@ -62,8 +62,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T
 }
 
+/** 项目列表缓存：30s 内复用，避免每次进首页都打一次接口（PRD §5.5）。 */
+const LIST_TTL = 30_000
+let listCache: { at: number; mine: boolean; data: ProjectSummary[] } | null = null
+
 export const api = {
-  listProjects: () => request<{ projects: ProjectSummary[] }>('/api/projects'),
+  listProjects: (mine = false, force = false) => {
+    const now = Date.now()
+    if (!force && listCache && listCache.mine === mine && now - listCache.at < LIST_TTL) {
+      return Promise.resolve({ projects: listCache.data })
+    }
+    return request<{ projects: ProjectSummary[] }>(`/api/projects${mine ? '?mine=1' : ''}`).then((payload) => {
+      listCache = { at: Date.now(), mine, data: payload.projects }
+      return payload
+    })
+  },
+  /** 让服务端中断当前生成；连接不关，中断后服务端会提交已完成的文件。 */
+  stop: (id: string) => request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   createProject: (input: { prompt?: string; engine?: EngineId; design?: DesignPrefs }) =>
     request<{ project: Project }>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
   getProject: (id: string) =>

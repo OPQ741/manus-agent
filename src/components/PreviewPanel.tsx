@@ -3,6 +3,7 @@ import type { Check } from '../../shared/types'
 import { injectSeed, readSeed } from '../lib/seed'
 import {
   IconAlert,
+  IconCheck,
   IconDesktop,
   IconExternal,
   IconMobile,
@@ -27,10 +28,16 @@ interface Props {
 export function PreviewPanel({ projectId, html, checks, errors, onHeal, onRefresh, shareUrl }: Props) {
   const [device, setDevice] = useState<Device>('desktop')
   const [nonce, setNonce] = useState(0)
+  const [showChecks, setShowChecks] = useState(false)
 
   const srcDoc = useMemo(() => injectSeed(html, readSeed(projectId)), [html, projectId, nonce])
 
   const blocking = checks.find((check) => check.level === 'block' && !check.ok)
+  const passed = checks.filter((check) => check.ok).length
+  const warned = checks.filter((check) => !check.ok && check.level !== 'block').length
+  const failed = checks.filter((check) => !check.ok && check.level === 'block').length
+  const health = failed > 0 ? 'bad' : warned > 0 ? 'warn' : 'ok'
+  const healthLabel = failed > 0 ? `${failed} 项阻断` : warned > 0 ? `${warned} 项提醒` : `${passed} 项检查通过`
 
   const openStandalone = () => {
     try {
@@ -74,6 +81,17 @@ export function PreviewPanel({ projectId, html, checks, errors, onHeal, onRefres
             <span className="dot" style={{ color: '#3bb273' }} />
             nucleus://preview/{projectId}
           </div>
+          {checks.length > 0 ? (
+            <button
+              className={`health-pill ${health}`}
+              onClick={() => setShowChecks((value) => !value)}
+              aria-expanded={showChecks}
+              title="查看静态自检结果"
+            >
+              {health === 'ok' ? <IconCheck size={13} /> : <IconAlert size={13} />}
+              {healthLabel}
+            </button>
+          ) : null}
           <button
             className="btn sm ghost"
             onClick={() => {
@@ -104,6 +122,20 @@ export function PreviewPanel({ projectId, html, checks, errors, onHeal, onRefres
             <IconShare size={14} />
           </button>
         </div>
+
+        {showChecks && checks.length > 0 ? (
+          <div className="health-panel">
+            {checks.map((check) => (
+              <div key={check.id} className={`health-row ${check.ok ? 'ok' : check.level}`}>
+                <span className="health-label">
+                  {check.ok ? <IconCheck size={12} /> : <IconAlert size={12} />}
+                  {check.label}
+                </span>
+                {check.detail ? <span className="health-detail">{check.detail}</span> : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         {html ? (
           <div className={`frame-wrap device-${device}`}>

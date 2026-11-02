@@ -75,6 +75,7 @@ export function summarize(project: Project): ProjectSummary {
     version: project.version,
     fileCount: project.files.length,
     engine: project.engine,
+    createdBy: project.createdBy,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   }
@@ -156,8 +157,13 @@ export class Store {
 
   /* ------------------------------ projects ------------------------------ */
 
-  listProjects(): ProjectSummary[] {
+  /**
+   * 项目列表。传入 mine（访客标识）时只返回该访客创建的项目。
+   * 注意：这是**展示层过滤**，不是安全边界 —— 免注册 Demo 不做写隔离。
+   */
+  listProjects(mine?: string): ProjectSummary[] {
     return [...this.db.projects]
+      .filter((project) => !mine || project.createdBy === mine)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .map((project) => summarize(project))
   }

@@ -7,7 +7,7 @@
 
 import type { AgentEvent, Check, DesignPrefs, EngineId, FileEntry, Plan, Usage } from '../../shared/types'
 import { assemble } from '../preview/assemble'
-import { compose, extractSlots, planFor, type Slots } from './composer'
+import { compose, planFor, slotsFor, type Slots } from './composer'
 import { LlmError, streamChat, type LlmConfig } from './llm'
 import { editTurnMessages, firstTurnMessages } from './prompts'
 import { ProtocolParser } from './protocol'
@@ -25,6 +25,10 @@ export interface GenContext {
 /** 生成结束后的产物，交给路由层持久化。 */
 export interface GenSink {
   files: Map<string, string>
+  /** 本轮真正写完（收到正常闭合的 file_end）的路径。用于「中断保留」时区分新旧内容。 */
+  completed: Set<string>
+  /** 本轮被显式删除的路径。 */
+  deleted: Set<string>
   plan: Plan | null
   checks: Check[]
   warnings: string[]
@@ -51,7 +55,7 @@ export class LocalEngine implements AgentEngine {
   readonly id = 'local' as const
 
   async plan(ctx: GenContext): Promise<Plan> {
-    return planFor(extractSlots(ctx.prompt, ctx.design))
+    return planFor(slotsFor(ctx.prompt, ctx.design, ctx.files))
   }
 
   async *write(ctx: GenContext, _plan: Plan): AsyncGenerator<string> {
@@ -74,7 +78,7 @@ export class CloudEngine implements AgentEngine {
   }
 
   async plan(ctx: GenContext): Promise<Plan> {
-    const slots: Slots = extractSlots(ctx.prompt, ctx.design)
+    const slots: Slots = slotsFor(ctx.prompt, ctx.design, ctx.files)
     // 先给一张"占位方案"，模型真正的 plan 会在流里覆盖它，用户不必等首字节。
     return {
       name: slots.name || '新应用',
@@ -135,8 +139,14 @@ export async function* runGeneration(
   const applyEvent = (event: AgentEvent) => {
     if (event.type === 'file_end') {
       files.set(event.path, event.content)
+      // 只有"正常闭合"的文件才算写完；被截断的（流断了/模型忘了闭合）
+      // 在中断保留时要回退到旧版本，不能当成完整产物。
+      if (!event.truncated) sink.completed.add(event.path)
+      else sink.completed.delete(event.path)
     } else if (event.type === 'delete') {
       files.delete(event.path)
+      sink.completed.delete(event.path)
+      sink.deleted.add(event.path)
     } else if (event.type === 'plan') {
       sink.plan = event.plan
       plan = event.plan
@@ -209,6 +219,8 @@ export function toErrorEvent(error: unknown): AgentEvent {
 export function createSink(files: FileEntry[], plan: Plan | null): GenSink {
   return {
     files: new Map(files.map((file) => [file.path, file.content])),
+    completed: new Set(),
+    deleted: new Set(),
     plan,
     checks: [],
     warnings: [],

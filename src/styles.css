@@ -794,6 +794,91 @@ textarea {
   text-overflow: ellipsis;
 }
 
+/* 常驻健康度指示灯：静态自检结果的入口（06 §8 P0-3） */
+.health-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.health-pill:hover {
+  border-color: var(--ink-soft);
+  color: var(--ink);
+}
+
+.health-pill.ok {
+  color: #1f7a52;
+  border-color: #cfe6db;
+  background: #f4fbf7;
+}
+
+.health-pill.warn {
+  color: #96601c;
+  border-color: #eddcbe;
+  background: #fdf8ef;
+}
+
+.health-pill.bad {
+  color: #a32c44;
+  border-color: #f0ccd4;
+  background: #fff5f7;
+}
+
+.health-panel {
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.health-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.health-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  color: var(--ink);
+}
+
+.health-row.ok .health-label {
+  color: #1f7a52;
+}
+
+.health-row.warn .health-label {
+  color: #96601c;
+}
+
+.health-row.block .health-label {
+  color: #a32c44;
+}
+
+.health-detail {
+  color: var(--muted);
+  font-size: 11.5px;
+  min-width: 0;
+  word-break: break-all;
+}
+
 .frame-wrap {
   flex: 1;
   min-height: 0;
@@ -849,6 +934,25 @@ textarea {
 
 .error-banner button {
   margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.error-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.error-body strong {
+  font-weight: 600;
+}
+
+.error-body span {
+  color: #a2505f;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-line;
 }
 
 .check-list {

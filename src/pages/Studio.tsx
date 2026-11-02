@@ -6,6 +6,7 @@ import { PreviewPanel } from '../components/PreviewPanel'
 import { TopBar } from '../components/TopBar'
 import { VersionPanel } from '../components/VersionPanel'
 import {
+  IconAlert,
   IconBack,
   IconCode,
   IconDownload,
@@ -17,7 +18,8 @@ import {
   Spinner,
   toast,
 } from '../components/ui'
-import { api, generate } from '../lib/api'
+import { ApiError, api, generate } from '../lib/api'
+import { explainError } from '../lib/errors'
 import { applyStorageMessage } from '../lib/seed'
 import { takePendingPrompt } from '../lib/pending'
 
@@ -94,7 +96,7 @@ export function StudioPage({ id }: { id: string }) {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ code: string; message: string } | null>(null)
   const [runtimeErrors, setRuntimeErrors] = useState<string[]>([])
   const [settings, setSettings] = useState<PublicSettings | null>(null)
   const [renaming, setRenaming] = useState(false)
@@ -103,7 +105,14 @@ export function StudioPage({ id }: { id: string }) {
 
   const abortRef = useRef<AbortController | null>(null)
   const busyRef = useRef(false)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  /** 当前项目已有多少文件 —— 用来判断「首次生成」还是「迭代」，避免抢用户的页签 */
+  const fileCountRef = useRef(0)
   const runningFileRef = live.files.find((file) => !file.done)?.path ?? null
+
+  useEffect(() => {
+    fileCountRef.current = detail?.project.files.length ?? 0
+  }, [detail])
 
   const refresh = useCallback(async () => {
     const data = await api.getProject(id)
@@ -117,6 +126,7 @@ export function StudioPage({ id }: { id: string }) {
       if (busyRef.current) return
       const text = prompt.trim()
       if (!text) return
+      const hadNoFiles = fileCountRef.current === 0
       busyRef.current = true
       setBusy(true)
       setPendingUser(text)
@@ -130,6 +140,9 @@ export function StudioPage({ id }: { id: string }) {
 
       const queue: AgentEvent[] = []
       let frame = 0
+      let partial = false
+      let kept = 0
+      let streamError: { code: string; message: string } | null = null
       const flush = () => {
         frame = 0
         if (queue.length === 0) return
@@ -137,6 +150,13 @@ export function StudioPage({ id }: { id: string }) {
         setLive((prev) => applyEvents(prev, events))
       }
       const enqueue = (event: AgentEvent) => {
+        if (event.type === 'done' && event.partial) {
+          partial = true
+          kept = event.kept ?? 0
+        }
+        // 流里的 error 事件不会让 fetch 抛错，必须自己接住，
+        // 否则模型 401 / 超时这类失败在界面上是"静默失败"
+        if (event.type === 'error') streamError = { code: event.code, message: event.message }
         queue.push(event)
         if (!frame) frame = requestAnimationFrame(flush)
       }
@@ -149,13 +169,27 @@ export function StudioPage({ id }: { id: string }) {
         }
         flush()
         const data = await refresh()
-        if (data.project.files.length > 0) setTab('preview')
-        toast(`已更新到 v${data.project.version}`)
+        if (streamError) {
+          setError(streamError)
+        } else {
+          // 只有"从零生成第一次"才自动切到预览；迭代时尊重用户当前在看的那一页
+          if (hadNoFiles && data.project.files.length > 0) setTab('preview')
+          if (partial) {
+            toast(
+              kept > 0
+                ? `已停止，保留了 ${kept} 个已完成的文件（v${data.project.version}）`
+                : '已停止：这次还没写完任何文件，没有产生新版本',
+            )
+          } else {
+            toast(`已更新到 v${data.project.version}`)
+          }
+        }
       } catch (err) {
         if (controller.signal.aborted) {
           toast('已停止生成，未完成的改动不会写入')
         } else {
-          setError(err instanceof Error ? err.message : '生成失败')
+          const apiError = err as ApiError
+          setError({ code: apiError.code ?? 'internal', message: apiError.message ?? '生成失败' })
         }
         try {
           await refresh()
@@ -187,7 +221,10 @@ export function StudioPage({ id }: { id: string }) {
         const pending = takePendingPrompt(id)
         if (pending && data.project.files.length === 0) void run(pending)
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : '项目加载失败')
+        if (!cancelled) {
+          const apiError = err as ApiError
+          setError({ code: apiError.code ?? 'internal', message: apiError.message ?? '项目加载失败' })
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -198,6 +235,17 @@ export function StudioPage({ id }: { id: string }) {
       abortRef.current?.abort()
     }
   }, [id, run])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        inputRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -226,6 +274,19 @@ export function StudioPage({ id }: { id: string }) {
       `预览出现了以下运行时错误，请定位并修复。只输出改动过的文件，不要重写没有问题的部分：\n${list}`,
     )
   }
+
+  /**
+   * 停止生成。
+   *
+   * 刻意**不**直接 abort 掉 SSE 连接：连接一断就收不到服务端的确认。
+   * 这里只发一个 /stop，请求服务端中断引擎；服务端随后把"已写完的文件"
+   * 提交成一个新版本，再通过同一条流回一个 done(partial) 事件。
+   */
+  const stop = useCallback(() => {
+    void api.stop(id).catch(() => {
+      /* 生成可能已经结束，忽略 */
+    })
+  }, [id])
 
   const rollback = async (seq: number) => {
     setRolling(true)
@@ -271,7 +332,7 @@ export function StudioPage({ id }: { id: string }) {
         <div className="home">
           <div className="empty-block">
             <p style={{ margin: 0, fontWeight: 600 }}>项目不存在</p>
-            <p style={{ margin: '6px 0 14px', fontSize: 12.5 }}>{error ?? '可能已经被删除了'}</p>
+            <p style={{ margin: '6px 0 14px', fontSize: 12.5 }}>{error?.message ?? '可能已经被删除了'}</p>
             <a className="btn primary" href="#/">
               回到首页
             </a>
@@ -284,6 +345,7 @@ export function StudioPage({ id }: { id: string }) {
   const { project, messages, versions } = detail
   const shareUrl = `${window.location.origin}/#/p/${project.slug}`
   const canSend = !busy && input.trim().length > 0
+  const errorInfo = explainError(error?.code, error?.message ?? '')
 
   return (
     <>
@@ -352,7 +414,26 @@ export function StudioPage({ id }: { id: string }) {
           {error ? (
             <div style={{ padding: '0 14px 8px' }}>
               <div className="error-banner">
-                <span>{error}</span>
+                <IconAlert size={15} />
+                <div className="error-body">
+                  <strong>{errorInfo.title}</strong>
+                  <span>{errorInfo.hint}</span>
+                </div>
+                {errorInfo.action.kind !== 'none' ? (
+                  <button
+                    className="btn sm"
+                    onClick={() => {
+                      if (errorInfo.action.kind === 'settings') window.location.hash = '#/settings'
+                      else if (errorInfo.action.kind === 'home') window.location.hash = '#/'
+                      else {
+                        setError(null)
+                        void run(input.trim() || error!.message)
+                      }
+                    }}
+                  >
+                    {errorInfo.action.label}
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -360,6 +441,7 @@ export function StudioPage({ id }: { id: string }) {
           <div className="chat-composer">
             <div className="chat-input">
               <textarea
+                ref={inputRef}
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
@@ -369,7 +451,7 @@ export function StudioPage({ id }: { id: string }) {
                     setInput('')
                     void run(text)
                   }
-                  if (event.key === 'Escape' && busy) abortRef.current?.abort()
+                  if (event.key === 'Escape' && busy) stop()
                 }}
                 placeholder={
                   project.files.length === 0
@@ -386,13 +468,13 @@ export function StudioPage({ id }: { id: string }) {
                       <Spinner /> {live.stage === 'write' ? '正在写代码' : live.stage === 'verify' ? '正在自检' : '正在拆解'}
                     </>
                   ) : (
-                    <span className="muted">⌘/Ctrl + Enter 发送</span>
+                    <span className="muted">⌘/Ctrl + Enter 发送 · ⌘/Ctrl + K 聚焦</span>
                   )}
                 </span>
                 <div className="spacer" />
                 {busy ? (
-                  <button className="btn sm" onClick={() => abortRef.current?.abort()}>
-                    <IconStop size={13} /> 停止
+                  <button className="btn sm" onClick={stop}>
+                    <IconStop size={13} /> 停止（保留已完成文件）
                   </button>
                 ) : (
                   <button

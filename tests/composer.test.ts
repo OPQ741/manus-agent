@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classify, compose, composeFiles, extractSlots, planFor } from '../server/agent/composer'
+import { classify, compose, composeFiles, detectArchetype, extractSlots, planFor } from '../server/agent/composer'
 import { assemble } from '../server/preview/assemble'
 import { DESIGN } from './helpers'
 
@@ -135,5 +135,33 @@ describe('composer · 编译产物', () => {
     const plan = planFor(slots)
     expect(plan.files.map((file) => file.path)).toContain('index.html')
     expect(plan.steps.length).toBeGreaterThan(2)
+  })
+})
+
+describe('composer · 迭代时保留应用类型', () => {
+  it('UT-COMP-15 迭代指令没点名类型时沿用原来的原型', () => {
+    const first = composeFiles('做一个记账应用，记录金额和备注', DESIGN)
+    expect(first.some((file) => file.path === 'app.js' && file.content.includes('nucleus:expense'))).toBe(true)
+
+    // 「把主色换成墨绿」里没有任何类型关键词 —— 不能把记账应用换成落地页
+    const second = compose('把主色换成墨绿', DESIGN, first)
+    expect(second.slots.archetype).toBe('expense')
+  })
+
+  it('UT-COMP-16 迭代指令明确点名类型时才切换', () => {
+    const first = composeFiles('做一个记账应用', DESIGN)
+    const second = compose('改成待办清单', DESIGN, first)
+    expect(second.slots.archetype).toBe('todo')
+  })
+
+  it('UT-COMP-17 detectArchetype 能从产物指纹反推类型', () => {
+    const files = composeFiles('做一个番茄钟，25 分钟专注', DESIGN)
+    expect(detectArchetype(files)).toBe('pomodoro')
+    expect(detectArchetype([])).toBe(null)
+  })
+
+  it('UT-COMP-18 首轮生成不受影响', () => {
+    const slots = extractSlots('做一个记账应用', DESIGN)
+    expect(slots.archetype).toBe('expense')
   })
 })

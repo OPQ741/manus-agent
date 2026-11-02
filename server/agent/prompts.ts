@@ -81,7 +81,7 @@ export function editTurnMessages(
   files: FileEntry[],
   plan: Plan | null,
 ): ChatMessage[] {
-  const context = renderFiles(files)
+  const context = renderFiles(files, prompt)
   return [
     { role: 'system', content: SYSTEM_PROMPT },
     {
@@ -101,19 +101,164 @@ ${context}
 /** 上下文体积上限：超出时按文件截断，宁可少给也不能把上下文撑爆。 */
 export const MAX_CONTEXT_CHARS = 24000
 
-export function renderFiles(files: FileEntry[]): string {
-  const parts: string[] = []
-  let budget = MAX_CONTEXT_CHARS
-  for (const file of files) {
-    if (budget <= 0) {
-      parts.push(`<file path="${file.path}">（内容过长已省略）</file>`)
+/** 单个文件被截断时，至少要给这么多内容，否则不如不给。 */
+const MIN_TRUNCATE_CHARS = 600
+
+/**
+ * 指令 → 文件类型亲和度。
+ *
+ * 纯词法匹配在中文上很弱（"主色换成墨绿"里的"色"几乎每个 CSS 都命中），
+ * 所以先按**语义类别**给文件加权，再叠加词法分。
+ * 权重是分路径的：改样式时 CSS 远重于 HTML，改布局时反过来。
+ */
+const AFFINITY: { pattern: RegExp; paths: { matcher: RegExp; weight: number }[] }[] = [
+  {
+    pattern: /色|主题|风格|配色|皮肤|dark|light|theme|color|style/i,
+    paths: [
+      { matcher: /\.css$/i, weight: 8 },
+      { matcher: /\.html$/i, weight: 3 },
+    ],
+  },
+  {
+    pattern: /布局|结构|页面|元素|排版|界面|layout|page|section/i,
+    paths: [
+      { matcher: /\.html$/i, weight: 8 },
+      { matcher: /\.css$/i, weight: 2 },
+    ],
+  },
+  {
+    pattern: /功能|逻辑|交互|按钮|表单|计算|保存|删除|筛选|统计|function|button|form|logic/i,
+    paths: [
+      { matcher: /\.js$/i, weight: 8 },
+      { matcher: /\.html$/i, weight: 3 },
+    ],
+  },
+  {
+    pattern: /文案|文字|标题|内容|文本|text|copy|label/i,
+    paths: [{ matcher: /\.html$/i, weight: 4 }],
+  },
+  {
+    pattern: /图表|饼图|占比|趋势|chart|graph|percent/i,
+    paths: [
+      { matcher: /\.js$/i, weight: 5 },
+      { matcher: /\.html$/i, weight: 2 },
+    ],
+  },
+]
+
+/** 分词：英文按词，中文按二元组（单字噪声太大）。 */
+export function tokenize(text: string): string[] {
+  const out: string[] = []
+  const lower = text.toLowerCase()
+  for (const m of lower.matchAll(/[a-z][a-z0-9_-]{1,}/g)) out.push(m[0])
+  const cjk = lower.replace(/[^一-龥]+/g, ' ')
+  for (const chunk of cjk.split(/\s+/)) {
+    if (!chunk) continue
+    if (chunk.length === 1) {
+      out.push(chunk)
       continue
     }
-    const content = file.content.length > budget ? file.content.slice(0, budget) + '\n/* …已截断… */' : file.content
-    budget -= file.content.length
-    parts.push(`<file path="${file.path}">\n${content}\n</file>`)
+    for (let i = 0; i + 1 < chunk.length; i++) out.push(chunk.slice(i, i + 2))
   }
-  return parts.join('\n')
+  return out
+}
+
+/** 文件与当前指令的相关度：语义类别 + 词法命中。 */
+export function relevance(file: FileEntry, instruction: string): number {
+  const path = file.path.toLowerCase()
+  const content = file.content.toLowerCase()
+  let score = 0
+
+  // 入口文件永远相关：模型至少要知道页面骨架长什么样
+  if (/^(index|main|app)\.html?$/i.test(file.path)) score += 2
+
+  for (const rule of AFFINITY) {
+    if (!rule.pattern.test(instruction)) continue
+    for (const entry of rule.paths) if (entry.matcher.test(path)) score += entry.weight
+  }
+
+  const tokens = tokenize(instruction)
+  for (const token of tokens) {
+    if (path.includes(token)) score += 4
+    else if (token.length > 1 && content.includes(token)) score += 1
+  }
+  return score
+}
+
+export interface ContextFile {
+  path: string
+  content: string
+  truncated: boolean
+}
+
+/**
+ * 在预算内挑选要发给模型的文件。
+ *
+ * 与旧策略的关键区别：
+ *  1. **不整份丢弃**。旧策略按路径顺序累加，超预算后剩下的文件直接消失 ——
+ *     模型会以为那个文件不存在，从而把它整个重建。
+ *  2. **按相关度排序**。"主色换成墨绿"应该优先给 styles.css，
+ *     而不是碰巧排在最前面的 index.html。
+ *  3. **入口文件保底**。即使预算紧张，也保证模型看得到页面骨架。
+ */
+export function selectContext(files: FileEntry[], instruction: string, budget = MAX_CONTEXT_CHARS): ContextFile[] {
+  if (files.length === 0) return []
+
+  const scored = files
+    .map((file) => ({ file, score: relevance(file, instruction) }))
+    .sort((a, b) => b.score - a.score || a.file.content.length - b.file.content.length)
+
+  const chosen = new Map<string, ContextFile>()
+  let used = 0
+
+  for (const { file } of scored) {
+    const overhead = file.path.length + 24
+    const cost = file.content.length + overhead
+    if (used + cost <= budget) {
+      chosen.set(file.path, { path: file.path, content: file.content, truncated: false })
+      used += cost
+      continue
+    }
+    const remain = budget - used - overhead
+    if (remain >= MIN_TRUNCATE_CHARS) {
+      chosen.set(file.path, { path: file.path, content: file.content.slice(0, remain), truncated: true })
+      used = budget
+      break
+    }
+    // 余额太少，截出来没意义 —— 跳过它，看看后面有没有更小的文件能塞进去
+  }
+
+  // 输出保持项目里的原始顺序，方便模型对照
+  return files.filter((file) => chosen.has(file.path)).map((file) => chosen.get(file.path)!)
+}
+
+/**
+ * 把当前文件集合渲染成给模型看的上下文。
+ *
+ * 包含一个 manifest：列出**所有**文件及其状态（完整 / 已截断 / 未提供），
+ * 让模型知道项目里还有什么，而不只是看到"给了什么"。
+ */
+export function renderFiles(files: FileEntry[], instruction = '', budget = MAX_CONTEXT_CHARS): string {
+  if (files.length === 0) return '（当前项目还没有文件）'
+
+  const selected = selectContext(files, instruction, budget)
+  const byPath = new Map(selected.map((item) => [item.path, item]))
+
+  const manifest = files
+    .map((file) => {
+      const item = byPath.get(file.path)
+      const size = file.content.length
+      if (!item) return `${file.path}（未提供内容：上下文预算已满，${size} 字符）`
+      if (item.truncated) return `${file.path}（已截断：只给了前 ${item.content.length} / ${size} 字符）`
+      return `${file.path}（完整，${size} 字符）`
+    })
+    .join('\n')
+
+  const body = selected
+    .map((item) => `<file path="${item.path}">\n${item.content}\n</file>`)
+    .join('\n')
+
+  return `<manifest>\n${manifest}\n</manifest>\n${body}`
 }
 
 /**

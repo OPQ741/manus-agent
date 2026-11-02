@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ProjectSummary } from '../../shared/types'
 import { TopBar } from '../components/TopBar'
 import { Empty, IconPlus, IconSend, IconSettings, IconTrash, toast } from '../components/ui'
-import { api } from '../lib/api'
+import { api, visitorId } from '../lib/api'
 import { timeAgo } from '../lib/format'
 import { setPendingPrompt } from '../lib/pending'
 
@@ -21,11 +21,13 @@ export function HomePage() {
   const [prompt, setPrompt] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [mine, setMine] = useState(false)
   const areaRef = useRef<HTMLTextAreaElement>(null)
+  const me = visitorId()
 
-  const load = async () => {
+  const load = async (onlyMine = mine, force = false) => {
     try {
-      const data = await api.listProjects()
+      const data = await api.listProjects(onlyMine, force)
       setProjects(data.projects)
     } catch (err) {
       setError(err instanceof Error ? err.message : '项目列表加载失败')
@@ -35,7 +37,7 @@ export function HomePage() {
   }
 
   useEffect(() => {
-    void load()
+    void load(mine)
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
@@ -44,7 +46,7 @@ export function HomePage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [mine])
 
   const start = async () => {
     const text = prompt.trim()
@@ -154,9 +156,17 @@ export function HomePage() {
             {loading ? '加载中…' : `${projects.length} 个 · 刷新后仍在，数据落盘保存`}
           </span>
           <div className="spacer" />
-          <a className="btn sm ghost" href="#/" onClick={() => void load()}>
+          <div className="segmented" role="group" aria-label="项目范围">
+            <button aria-pressed={!mine} onClick={() => setMine(false)}>
+              全部
+            </button>
+            <button aria-pressed={mine} onClick={() => setMine(true)}>
+              我的
+            </button>
+          </div>
+          <button className="btn sm ghost" onClick={() => void load(mine, true)}>
             <IconPlus size={13} /> 刷新
-          </a>
+          </button>
         </div>
 
         {loading ? (
@@ -167,8 +177,12 @@ export function HomePage() {
           </div>
         ) : projects.length === 0 ? (
           <Empty
-            title="还没有项目"
-            hint="在上面写一句话，或者点一个灵感标签，30 秒后这里就会出现你的第一个应用。"
+            title={mine ? '你还没有创建过项目' : '还没有项目'}
+            hint={
+              mine
+                ? '切回「全部」能看到所有人的项目；在上面写一句话，就会创建属于你的第一个应用。'
+                : '在上面写一句话，或者点一个灵感标签，30 秒后这里就会出现你的第一个应用。'
+            }
           />
         ) : (
           <div className="grid">
@@ -190,6 +204,7 @@ export function HomePage() {
                 <div className="row">
                   <h3>{project.name}</h3>
                   <div className="spacer" />
+                  {project.createdBy === me ? <span className="badge accent">我创建的</span> : null}
                   <span className="badge">{project.engine === 'local' ? '本地引擎' : '云模型'}</span>
                 </div>
                 <p>{project.summary || '还没有描述'}</p>

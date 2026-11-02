@@ -1,8 +1,15 @@
 import { useEffect, useState } from 'react'
 import type { ShareDetail } from '../../shared/types'
 import { Logo, Spinner, IconDownload, IconExternal } from '../components/ui'
-import { api } from '../lib/api'
+import { api, visitorId } from '../lib/api'
 import { injectSeed, readSeed } from '../lib/seed'
+
+/** 分享页只展示一个可读的作者标识，不暴露完整访客 ID。 */
+function authorLabel(createdBy: string): string {
+  if (!createdBy || createdBy === 'nucleus') return 'Nucleus 示例'
+  if (createdBy === visitorId()) return '我'
+  return `访客 ${createdBy.slice(0, 4)}`
+}
 
 export function SharePage({ slug }: { slug: string }) {
   const [data, setData] = useState<ShareDetail | null>(null)
@@ -51,7 +58,11 @@ export function SharePage({ slug }: { slug: string }) {
             {data?.project.name ?? '加载中…'}
           </div>
           <div className="muted" style={{ fontSize: 11.5 }}>
-            {data ? `v${data.project.version} · ${data.project.fileCount} 个文件 · ${data.project.engine === 'local' ? '本地引擎' : '云模型'}` : ''}
+            {data
+              ? `v${data.project.version} · ${data.project.fileCount} 个文件 · ${
+                  data.project.engine === 'local' ? '本地引擎' : '云模型'
+                } · 作者 ${authorLabel(data.project.createdBy)}`
+              : ''}
           </div>
         </div>
         <div className="spacer" />

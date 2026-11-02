@@ -42,6 +42,7 @@ export function VersionPanel({ versions, current, onRollback, busy }: Props) {
               <div className="row" style={{ gap: 8 }}>
                 <h5>{version.label}</h5>
                 {version.seq === current ? <span className="badge accent">当前</span> : null}
+                {version.label.startsWith('中断保留') ? <span className="badge warn">中断</span> : null}
                 <div className="spacer" />
                 {version.seq !== current ? (
                   <button className="btn sm" disabled={busy} onClick={() => onRollback(version.seq)}>

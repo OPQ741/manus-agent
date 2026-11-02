@@ -58,11 +58,15 @@ export type AgentEvent =
   | { type: 'plan'; plan: Plan }
   | { type: 'file_start'; path: string }
   | { type: 'file_delta'; path: string; chunk: string }
-  | { type: 'file_end'; path: string; lines: number; content: string }
+  | { type: 'file_end'; path: string; lines: number; content: string; truncated?: boolean }
   | { type: 'delete'; path: string }
   | { type: 'check'; check: Check }
   | { type: 'warning'; message: string }
-  | { type: 'done'; version: number; usage: Usage }
+  /**
+   * partial=true 表示这次是用户主动中断后保留的版本（只含已完成文件）。
+   * kept = 实际保留下来的文件数；为 0 表示这次什么都没写完，没有产生新版本。
+   */
+  | { type: 'done'; version: number; usage: Usage; partial?: boolean; kept?: number }
   | { type: 'error'; code: ApiErrorCode; message: string }
 
 export type ApiErrorCode =
@@ -137,8 +141,10 @@ export interface ProjectSummary {
   version: number
   fileCount: number
   engine: EngineId
-  updatedAt: number
+  /** 创建者的访客标识：用于在列表里标出「我创建的」，不是安全边界。 */
+  createdBy: string
   createdAt: number
+  updatedAt: number
 }
 
 export interface ProjectDetail {

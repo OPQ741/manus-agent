@@ -198,9 +198,27 @@ function defaultFields(archetype: Archetype): string[] {
   }
 }
 
+/**
+ * 从已有产物里反推 archetype。
+ *
+ * 生成的每个应用都会在 JS 里写死一个存储键 `nucleus:<archetype>:v1`，
+ * 它是唯一可靠的"这个应用是哪一类"的指纹。
+ */
+export function detectArchetype(files: FileEntry[]): Archetype | null {
+  if (files.length === 0) return null
+  const text = files.map((file) => file.content).join('\n')
+  for (const spec of ARCHETYPES) {
+    if (text.includes(`nucleus:${spec.id}:v1`)) return spec.id
+  }
+  return null
+}
+
 /** ② 槽位抽取 */
-export function extractSlots(prompt: string, design: DesignPrefs): Slots {
-  const { archetype } = classify(prompt)
+export function extractSlots(prompt: string, design: DesignPrefs, keep?: Archetype | null): Slots {
+  const { archetype: detected, score } = classify(prompt)
+  // 迭代时：新指令没点名应用类型，就沿用原来的类型。
+  // 否则「把主色改成墨绿」会把一个记账应用整个换成落地页 —— 这是最伤人的一类 bug。
+  const archetype = keep && score === 0 ? keep : detected
   const spec = ARCHETYPES.find((item) => item.id === archetype)!
   const accent = pickAccent(prompt, design)
   const theme: 'light' | 'dark' = isDarkWord(prompt) || design.theme === 'dark' ? 'dark' : 'light'
@@ -1252,9 +1270,16 @@ npx serve .
 `
 }
 
+/**
+ * 槽位抽取的对外入口：会根据已有产物决定"沿用还是切换"应用类型。
+ */
+export function slotsFor(prompt: string, design: DesignPrefs, previous: FileEntry[] = []): Slots {
+  return extractSlots(prompt, design, previous.length > 0 ? detectArchetype(previous) : null)
+}
+
 /** ④⑤ 编译为 NWF 协议文本 */
 export function compose(prompt: string, design: DesignPrefs, previous: FileEntry[] = []): { text: string; slots: Slots } {
-  const slots = extractSlots(prompt, design)
+  const slots = slotsFor(prompt, design, previous)
   const recipe = recipeFor(slots.archetype, slots)
   const plan = planFor(slots)
 

@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import type { AgentEvent, Check, DesignPrefs, EngineId, FileEntry, GenerateRequest } from '../shared/types'
 import { PROMPT_MAX_LENGTH } from '../shared/types'
 import { LlmError, testConnection, validateBaseUrl } from './agent/llm'
-import { createEngine, createSink, runGeneration } from './agent/runner'
+import { createEngine, createSink, runGeneration, type GenSink } from './agent/runner'
 import { assemble } from './preview/assemble'
 import { createZip } from './export/zip'
 import { seedDatabase } from './store/seed'
@@ -90,7 +90,8 @@ function sanitizeDesign(input: Partial<DesignPrefs> | undefined, fallback: Desig
   return design
 }
 
-const running = new Set<string>()
+/** 正在进行的生成：项目 id → 中断控制器。用来实现「停止并保留」。 */
+const running = new Map<string, AbortController>()
 
 async function handleGenerate(req: IncomingMessage, res: ServerResponse, store: Store, projectId: string) {
   const project = store.getProject(projectId)
@@ -103,7 +104,7 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse, store: 
     throw new HttpError(400, 'bad_request', `需求描述最多 ${PROMPT_MAX_LENGTH} 字`)
   }
 
-  if (running.has(projectId)) throw new HttpError(409, 'busy', '这个项目正在生成，请等它跑完')
+  if (running.has(projectId)) throw new HttpError(409, 'busy', '这个项目正在生成，请先停止或等它跑完')
 
   const settings = store.getSettings()
   const engine: EngineId = body.engine ?? settings.engine
@@ -118,6 +119,10 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse, store: 
     clientGone = true
     controller.abort()
   })
+  // 客户端断开后继续写会触发 ERR_STREAM_DESTROYED；这里吞掉，避免整台服务崩掉
+  res.on('error', () => {
+    clientGone = true
+  })
 
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
@@ -127,10 +132,15 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse, store: 
   })
 
   const send = (event: AgentEvent) => {
-    if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`)
+    if (clientGone || res.writableEnded || res.destroyed) return
+    try {
+      res.write(`data: ${JSON.stringify(event)}\n\n`)
+    } catch {
+      clientGone = true
+    }
   }
 
-  running.add(projectId)
+  running.set(projectId, controller)
   await store.appendMessage({ projectId, role: 'user', kind: 'text', content: prompt })
 
   const ctx = {
@@ -149,22 +159,27 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse, store: 
   try {
     const agent = createEngine(engine, ctx)
     for await (const event of runGeneration(ctx, agent, sink)) {
-      if (event.type === 'error') failed = { code: event.code, message: event.message }
       if (event.type === 'done') continue
+      if (event.type === 'error') {
+        failed = { code: event.code, message: event.message }
+        // 中断导致的错误不是错误：用户是主动点的停止，不该弹红色报错
+        if (!controller.signal.aborted) send(event)
+        continue
+      }
       send(event)
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     failed = { code: 'internal', message }
-    send({ type: 'error', code: 'internal', message: message.slice(0, 300) })
+    if (!controller.signal.aborted) {
+      send({ type: 'error', code: 'internal', message: message.slice(0, 300) })
+    }
   } finally {
     running.delete(projectId)
   }
 
-  if (clientGone) {
-    res.end()
-    return
-  }
+  const aborted = controller.signal.aborted
+  if (aborted) failed = null
 
   if (failed) {
     await store.appendMessage({
@@ -178,11 +193,30 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse, store: 
     return
   }
 
-  const files: FileEntry[] = [...sink.files.entries()].map(([path, content]) => ({
+  const previous = new Map(project.files.map((file) => [file.path, file.content]))
+  const files = aborted ? partialFiles(sink, previous) : [...sink.files.entries()].map(([path, content]) => ({
     path,
     content,
     updatedAt: Date.now(),
   }))
+
+  const changedCount = files.filter((file) => previous.get(file.path) !== file.content).length
+  const removedCount = project.files.filter((file) => !files.some((next) => next.path === file.path)).length
+
+  // 中断保留：没有任何完整文件落库，就不产生版本（避免历史里全是空版本）
+  if (aborted && changedCount === 0 && removedCount === 0) {
+    if (!clientGone) {
+      send({ type: 'done', version: project.version, usage: sink.usage, partial: true, kept: 0 })
+      res.end()
+    }
+    return
+  }
+
+  const label = aborted
+    ? `中断保留 · ${changedCount + removedCount} 个文件有变化`
+    : project.version === 0
+      ? '初始版本'
+      : `第 ${project.version + 1} 版 · ${prompt.slice(0, 22)}`
 
   const committed = await store.commit(projectId, {
     files,
@@ -190,12 +224,14 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse, store: 
     checks: sink.checks,
     prompt,
     usage: sink.usage,
-    label: project.version === 0 ? '初始版本' : `第 ${project.version + 1} 版 · ${prompt.slice(0, 22)}`,
+    label,
   })
 
   if (!committed) {
-    send({ type: 'error', code: 'not_found', message: '项目在生成过程中被删除了' })
-    res.end()
+    if (!clientGone) {
+      send({ type: 'error', code: 'not_found', message: '项目在生成过程中被删除了' })
+      res.end()
+    }
     return
   }
 
@@ -204,18 +240,46 @@ async function handleGenerate(req: IncomingMessage, res: ServerResponse, store: 
     projectId,
     role: 'agent',
     kind: sink.plan ? 'plan' : 'text',
-    content: `已更新 ${changed} 个文件（v${committed.version.seq}）`,
+    content: aborted
+      ? `已停止，保留了 ${changed} 个已完成的文件（v${committed.version.seq}）`
+      : `已更新 ${changed} 个文件（v${committed.version.seq}）`,
     meta: {
       plan: sink.plan,
       checks: sink.checks,
       warnings: sink.warnings,
       usage: sink.usage,
       version: committed.version.seq,
+      partial: aborted || undefined,
     },
   })
 
-  send({ type: 'done', version: committed.version.seq, usage: sink.usage })
+  if (clientGone) {
+    res.end()
+    return
+  }
+
+  send({ type: 'done', version: committed.version.seq, usage: sink.usage, partial: aborted || undefined, kept: aborted ? sink.completed.size : undefined })
   res.end()
+}
+
+/**
+ * 中断保留：只留下"本轮真正写完"的文件；
+ * 写了一半的文件回退到旧版本；本轮新开但没写完的文件直接丢弃。
+ */
+function partialFiles(sink: GenSink, previous: Map<string, string>): FileEntry[] {
+  const result = new Map<string, string>()
+  // 先按原项目顺序保留旧文件（写了一半的回退到旧内容）
+  for (const [path, content] of previous) {
+    if (sink.deleted.has(path)) continue
+    result.set(path, sink.completed.has(path) ? (sink.files.get(path) ?? content) : content)
+  }
+  // 再补上本轮新写完的文件
+  for (const [path, content] of sink.files) {
+    if (result.has(path)) continue
+    if (sink.deleted.has(path)) continue
+    if (sink.completed.has(path)) result.set(path, content)
+  }
+  return [...result.entries()].map(([path, content]) => ({ path, content, updatedAt: Date.now() }))
 }
 
 async function handleExport(res: ServerResponse, store: Store, projectId: string) {
@@ -353,7 +417,9 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
 
         if (!id) {
           if (method === 'GET') {
-            sendJson(res, 200, { projects: store.listProjects() })
+            const visitor = String(req.headers['x-visitor'] ?? '').slice(0, 40)
+            const onlyMine = url.searchParams.get('mine') === '1'
+            sendJson(res, 200, { projects: store.listProjects(onlyMine ? visitor : undefined) })
             return
           }
           if (method === 'POST') {
@@ -387,6 +453,14 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
           const result = await store.rollback(id, seq)
           if (!result) throw new HttpError(404, 'not_found', '找不到这个版本')
           sendJson(res, 200, { project: result.project, version: result.version })
+          return
+        }
+        // 停止当前生成：连接不关，服务端中断后把已完成的文件提交为新版本
+        if (action === 'stop' && method === 'POST') {
+          const controller = running.get(id)
+          if (!controller) throw new HttpError(409, 'busy', '当前没有进行中的生成')
+          controller.abort()
+          sendJson(res, 200, { ok: true })
           return
         }
 
@@ -428,6 +502,7 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
             version: project.version,
             fileCount: project.files.length,
             engine: project.engine,
+            createdBy: project.createdBy,
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,
           },
