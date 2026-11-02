@@ -284,6 +284,43 @@ try {
     )
   })
 
+  await step('E2E-13 「恢复默认」清除微调，刷新后不回退', async () => {
+    const projectId = page.url().split('/studio/')[1]?.split('?')[0]
+    await page.getByRole('tab', { name: /预览/ }).click()
+    await iframeElement().waitFor({ state: 'attached', timeout: 15000 })
+    await frame().locator('body').waitFor({ state: 'visible', timeout: 15000 })
+
+    // 前置：E2E-12 留下的玫红微调此刻应当还在
+    await page.getByRole('button', { name: '设计微调' }).click()
+    const before = previewFrame()
+    await before.waitForFunction(
+      () => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim().toLowerCase() === '#e11d6b',
+      null,
+      { timeout: 5000 },
+    )
+
+    // 点「恢复默认」→ 清除微调并落库（这一步曾经只在前端生效，刷新就回退）
+    await page.getByRole('button', { name: '恢复默认' }).click()
+    await page.waitForTimeout(900)
+
+    // 服务端：tweak 真的没了，产物里不再带微调样式
+    const detail = await (await page.request.get(`${BASE}/api/projects/${projectId}`)).json()
+    assert.equal(detail.project.tweak, undefined, '服务端仍保留微调，说明"恢复默认"没落库')
+    assert.ok(!detail.previewHtml.includes('data-nucleus="tweak"'), '产物仍注入微调样式')
+
+    // 整页刷新后：回到生成时的主色（墨绿 #17624b），而不是玫红
+    await page.reload({ waitUntil: 'networkidle' })
+    const after = previewFrame()
+    await after.waitForFunction(
+      () => {
+        const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim().toLowerCase()
+        return accent === '#17624b'
+      },
+      null,
+      { timeout: 8000 },
+    )
+  })
+
   console.log(`\n全部 ${results.length} 步通过 ✓`)
   if (consoleErrors.length) console.log('控制台错误（非阻断）：', consoleErrors.slice(0, 5))
   await browser.close()

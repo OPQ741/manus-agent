@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { AgentEvent, ProjectDetail } from '../shared/types'
+import { tweakPayload } from '../shared/tweak'
 import { createNucleusServer } from '../server/index'
 import { listZipEntries } from '../server/export/zip'
 
@@ -234,6 +235,9 @@ describe('HTTP · 设置与云模型链路', () => {
       let index = 0
       const timer = setInterval(() => {
         if (index >= protocol.length) {
+          // 末尾带一帧 usage：真实兼容服务在 stream_options.include_usage 下就是这么发的，
+          // 用它守住"token 用量能穿过 runner 落到 done 事件"。
+          res.write(`data: ${JSON.stringify({ usage: { total_tokens: 4321 } })}\n\n`)
           res.write('data: [DONE]\n\n')
           res.end()
           clearInterval(timer)
@@ -309,6 +313,9 @@ describe('HTTP · 设置与云模型链路', () => {
     )
 
     expect(events.some((event) => event.type === 'plan')).toBe(true)
+    // 上游回报的 token 用量必须穿过 runner 落到 done 事件（界面上要能如实展示）
+    const done = events.find((event) => event.type === 'done')
+    expect(done).toMatchObject({ type: 'done', usage: { engine: 'cloud', tokens: 4321 } })
     const fileEnds = events.filter((event) => event.type === 'file_end')
     expect(fileEnds.map((event) => (event.type === 'file_end' ? event.path : ''))).toEqual([
       'index.html',
@@ -503,5 +510,120 @@ describe('HTTP · 设计微调', () => {
     expect(response.status).toBe(200)
     const body = (await response.json()) as { project: { tweak?: { accent?: string; radius?: number } } }
     expect(body.project.tweak).toEqual({ radius: 28 })
+  })
+
+  it('IT-22 前端清空微调的真实载荷必须真的落库（守住 JSON.stringify 丢键这个坑）', async () => {
+    const project = await createProject('做一个记账应用，叫「清除账本」')
+    await generate(project.id)
+
+    // 曾经的 bug：draft 为空时前端发的是 `{ tweak: undefined }`，
+    // JSON.stringify 会把这个键整个丢掉 → 服务端收到 `{}` → 旧微调留着不动。
+    // 现在前端由 tweakPayload 归一成 null；这里同时钉住"归一结果"和"服务端行为"。
+    expect(JSON.stringify({ tweak: undefined })).toBe('{}')
+    const wire = JSON.stringify({ tweak: tweakPayload({}) })
+    expect(wire).toBe(JSON.stringify({ tweak: null }))
+
+    const patched = await fetch(`${base}/api/projects/${project.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tweak: { accent: '#0e7490', radius: 8 } }),
+    })
+    expect(((await patched.json()) as { project: { tweak?: unknown } }).project.tweak).toBeTruthy()
+
+    const cleared = await fetch(`${base}/api/projects/${project.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: wire,
+    })
+    const body = (await cleared.json()) as { project: { tweak?: unknown }; previewHtml: string }
+    expect(body.project.tweak).toBeUndefined()
+    expect(body.previewHtml).not.toContain('data-nucleus="tweak"')
+    expect(body.previewHtml).not.toContain('--accent: #0e7490;')
+
+    // 分享页与导出也必须跟着回到生成时的外观（三处一致的另一个方向）
+    const share = (await (await fetch(`${base}/api/share/${project.slug}`)).json()) as { html: string }
+    expect(share.html).not.toContain('data-nucleus="tweak"')
+  })
+
+  it('IT-23 载荷里不带 tweak 键（例如只改名）绝不能顺手清掉微调', async () => {
+    const project = await createProject('做一个记账应用，叫「改名账本」')
+    await generate(project.id)
+    await fetch(`${base}/api/projects/${project.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tweak: { accent: '#b45309' } }),
+    })
+
+    const renamed = await fetch(`${base}/api/projects/${project.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '新名字' }),
+    })
+    const body = (await renamed.json()) as { project: { name: string; tweak?: { accent?: string } } }
+    expect(body.project.name).toBe('新名字')
+    expect(body.project.tweak?.accent).toBe('#b45309')
+  })
+
+  it('IT-24 tweak 带原型链属性（{accent:"toString"}）被丢弃，不写脏数据也不 500', async () => {
+    const project = await createProject('做一个记账应用，叫「原型账本」')
+    const response = await fetch(`${base}/api/projects/${project.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tweak: { accent: 'toString', radius: 'valueOf' } }),
+    })
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { project: { tweak?: unknown } }
+    expect(body.project.tweak).toBeUndefined()
+  })
+})
+
+describe('HTTP · 接口面语义', () => {
+  it('IT-25 读接口只认 GET/HEAD：错误方法回 405 JSON，不再假装成功', async () => {
+    for (const path of ['/api/health', `/api/nonsense`, '/api/share/deadbeef10']) {
+      const response = await fetch(base + path, { method: 'DELETE' })
+      expect(response.status, path).toBe(405)
+      const body = (await response.json()) as { error: string }
+      expect(body.error, path).toBe('bad_request')
+    }
+  })
+
+  it('IT-26 /api/* 的 GET 未匹配路由回 404 JSON', async () => {
+    const response = await fetch(base + '/api/nonsense')
+    expect(response.status).toBe(404)
+    expect(((await response.json()) as { error: string }).error).toBe('bad_request')
+  })
+
+  it('IT-26b HEAD 读接口与 GET 同一方法分支，不被当成错误方法', async () => {
+    const project = await createProject('HEAD 详情项目')
+    const detail = await fetch(`${base}/api/projects/${project.id}`, { method: 'HEAD' })
+    expect(detail.status).toBe(200)
+    const settings = await fetch(`${base}/api/settings`, { method: 'HEAD' })
+    expect(settings.status).toBe(200)
+    const list = await fetch(`${base}/api/projects`, { method: 'HEAD' })
+    expect(list.status).toBe(200)
+  })
+
+  it('IT-27 HEAD 静态资源回头部与长度，但不返回正文', async () => {
+    // 主服务的 clientDir 指向不存在的路径（IT-14 用那条路径验证 503），
+    // 这里另起一个带真实产物目录的实例，专测 HEAD 语义。
+    const clientDir = await fs.mkdtemp(join(tmpdir(), 'nucleus-client-'))
+    await fs.writeFile(join(clientDir, 'index.html'), '<!doctype html><html><head></head><body>ok</body></html>', 'utf8')
+    const second = await createNucleusServer({ dataDir: await fs.mkdtemp(join(tmpdir(), 'nucleus-head-')), clientDir })
+    await new Promise<void>((resolve) => second.server.listen(0, '127.0.0.1', resolve))
+    const address = second.server.address()
+    const port = typeof address === 'object' && address ? address.port : 0
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/`, { method: 'HEAD' })
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type') ?? '').toContain('text/html')
+      expect(Number(response.headers.get('content-length'))).toBeGreaterThan(0)
+      expect(await response.text()).toBe('')
+
+      const get = await fetch(`http://127.0.0.1:${port}/`)
+      expect(await get.text()).toContain('<body>ok</body>')
+    } finally {
+      await new Promise<void>((resolve) => second.server.close(() => resolve()))
+      await fs.rm(clientDir, { recursive: true, force: true })
+    }
   })
 })

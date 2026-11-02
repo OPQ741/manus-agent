@@ -55,3 +55,9 @@ export function tweakVars(tweak: DesignTweak): Record<string, string> {
   if (typeof tweak.radius === 'number') vars['--radius'] = `${tweak.radius}px`
   return vars
 }
+
+/** 没有任何有效令牌的 tweak：前后端都按"等于没有微调"处理，避免留下空壳状态。 */
+export function isTweakEmpty(tweak: DesignTweak | null | undefined): boolean {
+  if (!tweak) return true
+  return !tweak.accent && typeof tweak.radius !== 'number'
+}

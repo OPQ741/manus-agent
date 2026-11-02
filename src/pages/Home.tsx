@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ProjectSummary } from '../../shared/types'
 import { TopBar } from '../components/TopBar'
-import { Empty, IconPlus, IconSend, IconSettings, IconTrash, toast } from '../components/ui'
+import { Empty, IconRefresh, IconSend, IconSettings, IconTrash, toast } from '../components/ui'
 import { api, visitorId } from '../lib/api'
 import { timeAgo } from '../lib/format'
 import { setPendingPrompt } from '../lib/pending'
@@ -22,6 +22,8 @@ export function HomePage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [mine, setMine] = useState(false)
+  /** 二次确认中的项目 id：项目带着全部版本历史，删掉无法恢复，不该一次误点就没。 */
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const areaRef = useRef<HTMLTextAreaElement>(null)
   const me = visitorId()
 
@@ -71,9 +73,12 @@ export function HomePage() {
   }
 
   const remove = async (id: string) => {
+    setConfirmDelete(null)
     try {
       await api.deleteProject(id)
       setProjects((prev) => prev.filter((item) => item.id !== id))
+      // 列表有 30s 缓存：删完必须强制刷新，否则切到「全部」还能看到刚删掉的项目
+      void load(mine, true)
       toast('已删除')
     } catch (err) {
       toast(err instanceof Error ? err.message : '删除失败')
@@ -164,8 +169,8 @@ export function HomePage() {
               我的
             </button>
           </div>
-          <button className="btn sm ghost" onClick={() => void load(mine, true)}>
-            <IconPlus size={13} /> 刷新
+          <button className="btn sm ghost" onClick={() => void load(mine, true)} title="强制刷新列表（绕过 30s 缓存）">
+            <IconRefresh size={13} /> 刷新
           </button>
         </div>
 
@@ -192,11 +197,14 @@ export function HomePage() {
                 className="project-card"
                 role="button"
                 tabIndex={0}
+                aria-label={`打开 ${project.name}`}
                 onClick={() => {
+                  if (confirmDelete && confirmDelete !== project.id) setConfirmDelete(null)
                   window.location.hash = `#/studio/${project.id}`
                 }}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
                     window.location.hash = `#/studio/${project.id}`
                   }
                 }}
@@ -216,14 +224,17 @@ export function HomePage() {
                     {timeAgo(project.updatedAt)}
                   </span>
                   <button
-                    className="btn sm ghost danger"
-                    aria-label={`删除 ${project.name}`}
+                    className={`btn sm ghost danger${confirmDelete === project.id ? ' is-on' : ''}`}
+                    aria-label={confirmDelete === project.id ? `确认删除 ${project.name}` : `删除 ${project.name}`}
+                    title={confirmDelete === project.id ? '再点一次确认删除' : '删除项目'}
                     onClick={(event) => {
                       event.stopPropagation()
-                      void remove(project.id)
+                      if (confirmDelete === project.id) void remove(project.id)
+                      else setConfirmDelete(project.id)
                     }}
                   >
                     <IconTrash size={13} />
+                    {confirmDelete === project.id ? <span style={{ marginLeft: 4 }}>确认删除？</span> : null}
                   </button>
                 </footer>
               </article>

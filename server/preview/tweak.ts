@@ -18,6 +18,9 @@ export { RADIUS_MAX, RADIUS_MIN, contrastInk, lighten, normalizeHex, tweakVars }
 /** 服务端入口校验：任何字段不合法就丢掉该字段，而不是整单拒绝。 */
 export function sanitizeTweak(input: unknown): DesignTweak | undefined {
   if (!input || typeof input !== 'object') return undefined
+  // JSON.parse 出来的对象带原型链：`{tweak:{accent:"toString"}}` 之类会让
+  // 属性查找落到 Object.prototype 上，拿到一个函数而不是字符串。
+  if (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null) return undefined
   const source = input as Record<string, unknown>
   const tweak: DesignTweak = {}
 

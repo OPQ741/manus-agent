@@ -21,6 +21,7 @@ import {
 import { ApiError, api, generate } from '../lib/api'
 import { explainError } from '../lib/errors'
 import { applyStorageMessage } from '../lib/seed'
+import { shareUrlFor } from '../lib/share'
 import { takePendingPrompt } from '../lib/pending'
 
 type Tab = 'preview' | 'code' | 'versions'
@@ -106,6 +107,11 @@ export function StudioPage({ id }: { id: string }) {
   const abortRef = useRef<AbortController | null>(null)
   const busyRef = useRef(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  /**
+   * 最近一次失败所用的指令：错误条上的「重新生成」要用**它**重试，
+   * 而不是输入框里此刻的内容（用户可能已经改了字，或者输入框是空的）。
+   */
+  const lastFailedPromptRef = useRef<string | null>(null)
   /** 当前项目已有多少文件 —— 用来判断「首次生成」还是「迭代」，避免抢用户的页签 */
   const fileCountRef = useRef(0)
   const runningFileRef = live.files.find((file) => !file.done)?.path ?? null
@@ -132,6 +138,7 @@ export function StudioPage({ id }: { id: string }) {
       setPendingUser(text)
       setRuntimeErrors([])
       setError(null)
+      lastFailedPromptRef.current = text
       setLive({ ...EMPTY_LIVE, running: true, stage: 'plan' })
       setTab('preview')
 
@@ -172,6 +179,7 @@ export function StudioPage({ id }: { id: string }) {
         if (streamError) {
           setError(streamError)
         } else {
+          lastFailedPromptRef.current = null
           // 只有"从零生成第一次"才自动切到预览；迭代时尊重用户当前在看的那一页
           if (hadNoFiles && data.project.files.length > 0) setTab('preview')
           if (partial) {
@@ -305,9 +313,13 @@ export function StudioPage({ id }: { id: string }) {
   /**
    * 保存设计微调。
    *
-   * 刻意**不**把返回的 previewHtml 塞回 state：那会让 iframe 的 srcdoc 变化 → 文档重载 →
-   * 应用内刚填的表单全没了。实时效果由 PreviewPanel 直接 postMessage 完成，
+   * 实时效果由 PreviewPanel 直接 postMessage 完成（不重载 iframe，应用内状态不丢），
    * 这里只负责"下次打开还是这个样子"。
+   *
+   * 但**必须**把服务端返回的 project 写回 state：否则「恢复默认」之后
+   * detail.project.tweak 还留着旧值，一旦预览被刷新/换视口/切页签回来，
+   * iframe 重新挂载就会按残留的旧微调覆盖用户刚选的颜色 —— 表现为"调了没生效"。
+   * 空 tweak 由 api 层归一成 null（清除），不会再把 `{}` 发成"什么都没发"。
    */
   const saveTweak = useCallback(
     async (next: DesignTweak | undefined) => {
@@ -358,9 +370,12 @@ export function StudioPage({ id }: { id: string }) {
   }
 
   const { project, messages, versions } = detail
-  const shareUrl = `${window.location.origin}/#/p/${project.slug}`
+  // 走 shareUrlFor 而不是裸拼 origin：托管网关的访问口令（?sharecode=）必须一起带上，
+  // 否则复制出去的链接在别人（以及刷新后的自己）那里是一页"链接不完整"。
+  const shareUrl = shareUrlFor(project.slug, window.location.origin)
   const canSend = !busy && input.trim().length > 0
   const errorInfo = explainError(error?.code, error?.message ?? '')
+  const retryPrompt = input.trim() || lastFailedPromptRef.current || ''
 
   return (
     <>
@@ -437,12 +452,14 @@ export function StudioPage({ id }: { id: string }) {
                 {errorInfo.action.kind !== 'none' ? (
                   <button
                     className="btn sm"
+                    disabled={errorInfo.action.kind === 'retry' && !retryPrompt}
                     onClick={() => {
                       if (errorInfo.action.kind === 'settings') window.location.hash = '#/settings'
                       else if (errorInfo.action.kind === 'home') window.location.hash = '#/'
                       else {
                         setError(null)
-                        void run(input.trim() || error!.message)
+                        setInput('')
+                        void run(retryPrompt)
                       }
                     }}
                   >

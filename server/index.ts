@@ -283,7 +283,7 @@ function partialFiles(sink: GenSink, previous: Map<string, string>): FileEntry[]
   return [...result.entries()].map(([path, content]) => ({ path, content, updatedAt: Date.now() }))
 }
 
-async function handleExport(res: ServerResponse, store: Store, projectId: string) {
+async function handleExport(res: ServerResponse, store: Store, projectId: string, headOnly = false) {
   const project = store.getProject(projectId)
   if (!project) throw new HttpError(404, 'not_found', '项目不存在')
   if (project.files.length === 0) throw new HttpError(400, 'bad_request', '这个项目还没有生成任何文件')
@@ -310,25 +310,28 @@ async function handleExport(res: ServerResponse, store: Store, projectId: string
     'content-disposition': `attachment; filename="${asciiName}.zip"; filename*=UTF-8''${encodeURIComponent(safeName)}.zip`,
     'content-length': zip.length,
   })
-  res.end(zip)
+  res.end(headOnly ? undefined : zip)
 }
 
-async function serveStatic(res: ServerResponse, pathname: string) {
+async function serveStatic(res: ServerResponse, pathname: string, clientDir: string, headOnly = false) {
   const relative = normalize(pathname).replace(/^(\.\.[/\\])+/, '').replace(/^[/\\]+/, '')
-  const candidate = join(CLIENT_DIR, relative || 'index.html')
-  if (!candidate.startsWith(CLIENT_DIR)) throw new HttpError(403, 'bad_request', '非法路径')
+  const candidate = join(clientDir, relative || 'index.html')
+  if (!candidate.startsWith(clientDir)) throw new HttpError(403, 'bad_request', '非法路径')
 
   try {
     const data = await fs.readFile(candidate)
-    res.writeHead(200, { 'content-type': MIME[extname(candidate)] ?? 'application/octet-stream' })
-    res.end(data)
+    res.writeHead(200, {
+      'content-type': MIME[extname(candidate)] ?? 'application/octet-stream',
+      'content-length': String(data.length),
+    })
+    res.end(headOnly ? undefined : data)
     return
   } catch {
     // SPA 回退
     try {
-      const html = await fs.readFile(join(CLIENT_DIR, 'index.html'))
-      res.writeHead(200, { 'content-type': MIME['.html']! })
-      res.end(html)
+      const html = await fs.readFile(join(clientDir, 'index.html'))
+      res.writeHead(200, { 'content-type': MIME['.html']!, 'content-length': String(html.length) })
+      res.end(headOnly ? undefined : html)
       return
     } catch {
       throw new HttpError(503, 'internal', '前端产物未构建，请先运行 npm run build')
@@ -338,6 +341,9 @@ async function serveStatic(res: ServerResponse, pathname: string) {
 
 export async function createNucleusServer(options: { dataDir?: string; clientDir?: string; port?: number } = {}) {
   const dataDir = options.dataDir ?? DATA_DIR
+  // clientDir 必须真的贯穿到静态服务：以前只回显在返回值里，
+  // 导致测试传了自定义产物目录却仍然读到全局默认目录（"配置没生效"的经典形态）。
+  const clientDir = resolve(options.clientDir ?? CLIENT_DIR)
   const store = await Store.open(resolveDataFile(dataDir))
   const seeded = await seedDatabase(store)
 
@@ -348,7 +354,12 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
     const method = req.method ?? 'GET'
 
     try {
+      // 读接口只认 GET/HEAD：以前不校验方法，DELETE /api/health 这类错误调用
+      // 会拿到 200 + 正常 JSON，调用方完全看不出自己用错了方法。
+      const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+
       if (pathname === '/api/health') {
+        if (!READ_METHODS.has(method)) throw new HttpError(405, 'bad_request', '不支持的方法')
         sendJson(res, 200, {
           ok: true,
           engine: store.getSettings().engine,
@@ -360,7 +371,7 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
       }
 
       if (pathname === '/api/settings') {
-        if (method === 'GET') {
+        if (method === 'GET' || method === 'HEAD') {
           sendJson(res, 200, store.publicSettings())
           return
         }
@@ -422,7 +433,7 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
         const action = segments[3]
 
         if (!id) {
-          if (method === 'GET') {
+          if (method === 'GET' || method === 'HEAD') {
             const visitor = String(req.headers['x-visitor'] ?? '').slice(0, 40)
             const onlyMine = url.searchParams.get('mine') === '1'
             sendJson(res, 200, { projects: store.listProjects(onlyMine ? visitor : undefined) })
@@ -448,8 +459,8 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
           await handleGenerate(req, res, store, id)
           return
         }
-        if (action === 'export' && method === 'GET') {
-          await handleExport(res, store, id)
+        if (action === 'export' && (method === 'GET' || method === 'HEAD')) {
+          await handleExport(res, store, id, method === 'HEAD')
           return
         }
         if (action === 'rollback' && method === 'POST') {
@@ -470,7 +481,7 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
           return
         }
 
-        if (method === 'GET') {
+        if (method === 'GET' || method === 'HEAD') {
           const detail = store.detail(id)
           if (!detail) throw new HttpError(404, 'not_found', '项目不存在')
           const preview = previewOf(detail.project.files, detail.project.tweak)
@@ -499,6 +510,7 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
       }
 
       if (segments[0] === 'api' && segments[1] === 'share' && segments[2]) {
+        if (!READ_METHODS.has(method)) throw new HttpError(405, 'bad_request', '不支持的方法')
         const project = store.getBySlug(segments[2])
         if (!project) throw new HttpError(404, 'not_found', '分享链接不存在')
         const preview = previewOf(project.files, project.tweak)
@@ -528,10 +540,14 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
         return
       }
 
-      if (segments[0] === 'api') throw new HttpError(404, 'not_found', '接口不存在')
+      // 任何没匹配到的 /api/* 一律用 JSON 回：绝不能掉进静态回退，
+      // 否则 DELETE /api/health 这类错误方法会拿到 200 + index.html，让调用方以为成功。
+      if (segments[0] === 'api') {
+        throw new HttpError(method === 'GET' || method === 'HEAD' || method === 'OPTIONS' ? 404 : 405, 'bad_request', '接口不存在或不支持该方法')
+      }
 
       if (method !== 'GET' && method !== 'HEAD') throw new HttpError(405, 'bad_request', '不支持的方法')
-      await serveStatic(res, pathname)
+      await serveStatic(res, pathname, clientDir, method === 'HEAD')
     } catch (error) {
       if (res.headersSent) {
         res.end()
@@ -541,7 +557,7 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
     }
   })
 
-  return { server, store, dataDir, clientDir: options.clientDir ?? CLIENT_DIR }
+  return { server, store, dataDir, clientDir }
 }
 
 export async function startServer() {

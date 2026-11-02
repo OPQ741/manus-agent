@@ -74,7 +74,10 @@ export function PreviewPanel({ projectId, html, checks, errors, tweak, onTweakSa
   const persist = async (next: DesignTweak) => {
     setSaving(true)
     try {
-      await onTweakSave(Object.keys(next).length > 0 ? next : undefined)
+      // 直接交给 api 归一：空对象 → null（清除）。
+      // 这里不要写成 `Object.keys(next).length > 0 ? next : undefined`：
+      // 那会在 JSON 序列化时把键整个丢掉，服务端收不到"清除"这个动作。
+      await onTweakSave(next)
     } catch {
       toast('微调没保存成功，刷新后会回到上次保存的外观')
     } finally {

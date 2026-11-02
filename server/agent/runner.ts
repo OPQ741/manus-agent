@@ -72,9 +72,16 @@ export class LocalEngine implements AgentEngine {
 export class CloudEngine implements AgentEngine {
   readonly id = 'cloud' as const
   private readonly config: LlmConfig
+  /** 上游回报的 token 用量（部分兼容服务在最后一帧带 usage）。 */
+  private lastUsage: Usage | null = null
 
   constructor(config: LlmConfig) {
     this.config = config
+  }
+
+  /** runner 在 done 事件里合并这个值，前端才能显示真实 token 而不是空。 */
+  get usage(): { tokens?: number } | null {
+    return this.lastUsage
   }
 
   async plan(ctx: GenContext): Promise<Plan> {
@@ -95,7 +102,12 @@ export class CloudEngine implements AgentEngine {
         ? editTurnMessages(ctx.prompt, ctx.design, ctx.files, ctx.plan)
         : firstTurnMessages(ctx.prompt, ctx.design)
 
-    for await (const delta of streamChat(this.config, messages, { signal: ctx.signal })) {
+    for await (const delta of streamChat(this.config, messages, {
+      signal: ctx.signal,
+      onUsage: (usage) => {
+        this.lastUsage = { ms: 0, engine: 'cloud', chars: 0, tokens: usage.tokens }
+      },
+    })) {
       yield delta
     }
   }
@@ -204,6 +216,9 @@ export async function* runGeneration(
     engine: engine.id,
     chars: sink.raw.length,
   }
+  // 上游若回报了 usage，就带上真实 token；带不到就留空，界面按字符数展示（不编造数字）。
+  const reported = (engine as { usage?: { tokens?: number } | null }).usage
+  if (reported?.tokens) usage.tokens = reported.tokens
   sink.usage = usage
   yield { type: 'done', version: 0, usage }
 }

@@ -11,6 +11,7 @@ import type {
   ShareDetail,
   Version,
 } from '../../shared/types'
+import { tweakPayload } from '../../shared/tweak'
 
 export class ApiError extends Error {
   readonly code: ApiErrorCode | string
@@ -89,11 +90,17 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ name }),
     }),
-  /** 保存设计微调；传 null 表示恢复默认。 */
-  updateTweak: (id: string, tweak: DesignTweak | null) =>
+  /**
+   * 保存设计微调。
+   *
+   * 空对象**必须**翻译成 `null`：`JSON.stringify({ tweak: undefined })` 得到 `{}`，
+   * 服务端看不到 tweak 这个键，于是「恢复默认」只在前端活了 3 秒、一刷新就回退。
+   * 这条边界是真实踩出来的（README 承诺"随项目保存"，PRD 承诺"可恢复"）。
+   */
+  updateTweak: (id: string, tweak: DesignTweak | null | undefined) =>
     request<{ project: Project; previewHtml: string }>(`/api/projects/${encodeURIComponent(id)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ tweak }),
+      body: JSON.stringify({ tweak: tweakPayload(tweak) }),
     }),
   deleteProject: (id: string) =>
     request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),

@@ -28,3 +28,6 @@ Thumbs.db
 # WorkBuddy 应用发布标记与大文件缓存
 .wbapp_*.genie
 .workbuddy/
+
+# 沙箱内为绕过 git dubious-ownership 生成的临时配置（不属于项目）
+.gitconfig-sandbox
