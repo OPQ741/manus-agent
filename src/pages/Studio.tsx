@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AgentEvent, ProjectDetail, PublicSettings } from '../../shared/types'
+import type { AgentEvent, DesignTweak, ProjectDetail, PublicSettings } from '../../shared/types'
 import { ChatStream, EMPTY_LIVE, type LiveState } from '../components/ChatStream'
 import { CodePanel } from '../components/CodePanel'
 import { PreviewPanel } from '../components/PreviewPanel'
@@ -302,6 +302,21 @@ export function StudioPage({ id }: { id: string }) {
     }
   }
 
+  /**
+   * 保存设计微调。
+   *
+   * 刻意**不**把返回的 previewHtml 塞回 state：那会让 iframe 的 srcdoc 变化 → 文档重载 →
+   * 应用内刚填的表单全没了。实时效果由 PreviewPanel 直接 postMessage 完成，
+   * 这里只负责"下次打开还是这个样子"。
+   */
+  const saveTweak = useCallback(
+    async (next: DesignTweak | undefined) => {
+      const { project } = await api.updateTweak(id, next ?? null)
+      setDetail((prev) => (prev ? { ...prev, project } : prev))
+    },
+    [id],
+  )
+
   const commitRename = async () => {
     const name = nameDraft.trim()
     setRenaming(false)
@@ -522,6 +537,8 @@ export function StudioPage({ id }: { id: string }) {
                 html={previewHtml}
                 checks={project.checks}
                 errors={runtimeErrors}
+                tweak={project.tweak}
+                onTweakSave={saveTweak}
                 onHeal={heal}
                 onRefresh={() => void refresh()}
                 shareUrl={shareUrl}

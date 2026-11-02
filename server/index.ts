@@ -9,11 +9,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { promises as fs } from 'node:fs'
 import { extname, join, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentEvent, Check, DesignPrefs, EngineId, FileEntry, GenerateRequest } from '../shared/types'
+import type { AgentEvent, Check, DesignPrefs, DesignTweak, EngineId, FileEntry, GenerateRequest } from '../shared/types'
 import { PROMPT_MAX_LENGTH } from '../shared/types'
 import { LlmError, testConnection, validateBaseUrl } from './agent/llm'
 import { createEngine, createSink, runGeneration, type GenSink } from './agent/runner'
-import { assemble } from './preview/assemble'
+import { assemble, entryPath } from './preview/assemble'
+import { injectTweak, sanitizeTweak } from './preview/tweak'
 import { createZip } from './export/zip'
 import { seedDatabase } from './store/seed'
 import { Store, resolveDataFile } from './store/store'
@@ -77,8 +78,8 @@ async function readJson<T>(req: IncomingMessage, limit = 1024 * 512): Promise<T>
   }
 }
 
-function previewOf(files: FileEntry[]): { html: string; checks: Check[] } {
-  const result = assemble(files)
+function previewOf(files: FileEntry[], tweak?: DesignTweak): { html: string; checks: Check[] } {
+  const result = assemble(files, tweak)
   return { html: result.html, checks: result.checks }
 }
 
@@ -288,7 +289,12 @@ async function handleExport(res: ServerResponse, store: Store, projectId: string
   if (project.files.length === 0) throw new HttpError(400, 'bad_request', '这个项目还没有生成任何文件')
 
   const hasReadme = project.files.some((file) => /^readme\.md$/i.test(file.path))
-  const entries = project.files.map((file) => ({ name: file.path, content: file.content }))
+  // 微调是"项目当前外观"的一部分：导出也必须带上，否则"下载下来跟预览长得不一样"
+  const tweakTarget = project.tweak ? entryPath(project.files) : null
+  const entries = project.files.map((file) => ({
+    name: file.path,
+    content: file.path === tweakTarget ? injectTweak(file.content, project.tweak) : file.content,
+  }))
   if (!hasReadme) {
     entries.push({
       name: 'README.md',
@@ -467,17 +473,20 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
         if (method === 'GET') {
           const detail = store.detail(id)
           if (!detail) throw new HttpError(404, 'not_found', '项目不存在')
-          const preview = previewOf(detail.project.files)
+          const preview = previewOf(detail.project.files, detail.project.tweak)
           sendJson(res, 200, { ...detail, previewHtml: preview.html })
           return
         }
         if (method === 'PATCH') {
-          const body = await readJson<{ name?: string }>(req)
+          const body = await readJson<{ name?: string; tweak?: DesignTweak | null }>(req)
           const project = await store.updateProject(id, {
             ...(typeof body.name === 'string' && body.name.trim() ? { name: body.name.trim().slice(0, 40) } : {}),
+            // 传 null 表示"恢复默认"；不传则不动
+            ...('tweak' in body ? { tweak: sanitizeTweak(body.tweak) } : {}),
           })
           if (!project) throw new HttpError(404, 'not_found', '项目不存在')
-          sendJson(res, 200, { project })
+          // 顺手回一份最新产物：前端据此可以同步首屏（不必再打一次 GET）
+          sendJson(res, 200, { project, previewHtml: previewOf(project.files, project.tweak).html })
           return
         }
         if (method === 'DELETE') {
@@ -492,7 +501,7 @@ export async function createNucleusServer(options: { dataDir?: string; clientDir
       if (segments[0] === 'api' && segments[1] === 'share' && segments[2]) {
         const project = store.getBySlug(segments[2])
         if (!project) throw new HttpError(404, 'not_found', '分享链接不存在')
-        const preview = previewOf(project.files)
+        const preview = previewOf(project.files, project.tweak)
         sendJson(res, 200, {
           project: {
             id: project.id,

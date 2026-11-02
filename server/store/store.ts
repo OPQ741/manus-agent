@@ -203,10 +203,16 @@ export class Store {
     return project
   }
 
-  async updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'summary' | 'design' | 'engine'>>): Promise<Project | null> {
+  async updateProject(
+    id: string,
+    patch: Partial<Pick<Project, 'name' | 'summary' | 'design' | 'engine' | 'tweak'>>,
+  ): Promise<Project | null> {
     const project = this.getProject(id)
     if (!project) return null
     Object.assign(project, patch)
+    // tweak 允许被显式清除（前端点"恢复默认"）：undefined 必须真的把键删掉，
+    // 否则 JSON 里会留下一个 null，回读时又变成"有微调"。
+    if ('tweak' in patch && patch.tweak === undefined) delete project.tweak
     project.updatedAt = Date.now()
     await this.save()
     return project

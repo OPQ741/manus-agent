@@ -34,7 +34,10 @@ async function step(name, fn) {
   }
 }
 
-const browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {})
+// 本机可能开着系统代理（Clash 之类），127.0.0.1 会被代理拦掉 → 直接绕过代理
+const browser = await chromium.launch(
+  CHROME ? { executablePath: CHROME, args: ['--no-proxy-server'] } : { args: ['--no-proxy-server'] },
+)
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
 const page = await context.newPage()
 
@@ -46,6 +49,17 @@ page.on('pageerror', (error) => consoleErrors.push('pageerror: ' + error.message
 
 const frame = () => page.frameLocator('iframe[title="应用预览"]')
 const iframeElement = () => page.locator('iframe[title="应用预览"]')
+/**
+ * 拿到预览 iframe 的 Frame 对象（需要 evaluate 时用）。
+ *
+ * 不按 url === 'about:srcdoc' 过滤：srcdoc + sandbox（无 allow-same-origin）时
+ * 不同 Chrome 版本上报的 frame url 可能是空串，按 url 过滤会偶发拿不到。
+ * 预览永远是主文档唯一/最后一个子 frame，取最后一个更稳。
+ */
+const previewFrame = () => {
+  const frames = page.frames().filter((item) => item !== page.mainFrame())
+  return frames[frames.length - 1]
+}
 
 try {
   console.log(`\nNucleus E2E · ${BASE}\n`)
@@ -98,9 +112,9 @@ try {
   })
 
   await step('E2E-05 运行时错误被捕获并可一键修复', async () => {
-    const frames = page.frames().filter((item) => item.url() === 'about:srcdoc')
-    assert.ok(frames.length > 0, '找不到预览 iframe')
-    await frames[frames.length - 1].evaluate(() => {
+    const preview = previewFrame()
+    assert.ok(preview, '找不到预览 iframe')
+    await preview.evaluate(() => {
       setTimeout(() => {
         throw new Error('E2E 模拟运行时错误')
       }, 0)
@@ -227,6 +241,47 @@ try {
     const stop = page.getByRole('button', { name: /保留已完成文件/ })
     await stop.waitFor({ state: 'visible', timeout: 10000 })
     await page.getByRole('button', { name: /^发送$/ }).waitFor({ state: 'visible', timeout: 30000 })
+  })
+
+  await step('E2E-12 设计微调实时生效、刷新后仍在', async () => {
+    const projectId = page.url().split('/studio/')[1]?.split('?')[0]
+    // 前面的用例把页签留在了「版本」，先回预览
+    await page.getByRole('tab', { name: /预览/ }).click()
+    await iframeElement().waitFor({ state: 'attached', timeout: 15000 })
+    await frame().locator('body').waitFor({ state: 'visible', timeout: 15000 })
+    await page.getByRole('button', { name: '设计微调' }).click()
+
+    // 1) 点色卡：不重新生成、不重载 iframe，变量应当立即变
+    await page.getByRole('button', { name: '主色 玫红' }).click()
+    const liveFrame = previewFrame()
+    await liveFrame.waitForFunction(
+      () => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim().toLowerCase() === '#e11d6b',
+      null,
+      { timeout: 5000 },
+    )
+
+    // 2) 拖动圆角滑杆：同样即时生效
+    await page.locator('input[aria-label="圆角大小"]').fill('6')
+    await liveFrame.waitForFunction(
+      () => getComputedStyle(document.documentElement).getPropertyValue('--radius').trim() === '6px',
+      null,
+      { timeout: 5000 },
+    )
+
+    // 3) 防抖保存后，服务端应记住这次微调
+    await page.waitForTimeout(900)
+    const detail = await (await page.request.get(`${BASE}/api/projects/${projectId}`)).json()
+    assert.equal(detail.project.tweak?.accent, '#e11d6b')
+    assert.equal(detail.project.tweak?.radius, 6)
+
+    // 4) 整页刷新：外观仍然是调过的那个（持久化，而不是内存里的临时效果）
+    await page.reload({ waitUntil: 'networkidle' })
+    const reloaded = previewFrame()
+    await reloaded.waitForFunction(
+      () => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim().toLowerCase() === '#e11d6b',
+      null,
+      { timeout: 8000 },
+    )
   })
 
   console.log(`\n全部 ${results.length} 步通过 ✓`)

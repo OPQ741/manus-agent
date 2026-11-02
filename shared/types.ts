@@ -17,6 +17,20 @@ export interface DesignPrefs {
   locale: Locale
 }
 
+/**
+ * 设计微调：只改设计令牌，不重新生成代码。
+ *
+ * 生成出的应用统一用 CSS 变量表达视觉（--accent / --radius ...），
+ * 所以"改主色"这件事没必要再花一次模型调用：改变量即可，
+ * 毫秒级生效、不丢应用内状态、可以随项目保存。
+ */
+export interface DesignTweak {
+  /** #rrggbb；缺省表示不覆盖 */
+  accent?: string
+  /** 0–28（px） */
+  radius?: number
+}
+
 export interface FileEntry {
   path: string
   content: string
@@ -88,6 +102,8 @@ export interface Project {
   summary: string
   engine: EngineId
   design: DesignPrefs
+  /** 设计微调（叠加在生成结果之上，不进入版本快照） */
+  tweak?: DesignTweak
   files: FileEntry[]
   plan: Plan | null
   checks: Check[]

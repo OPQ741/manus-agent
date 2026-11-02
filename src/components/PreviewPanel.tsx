@@ -1,12 +1,15 @@
-import { useMemo, useState } from 'react'
-import type { Check } from '../../shared/types'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Check, DesignTweak } from '../../shared/types'
+import { tweakVars } from '../../shared/theme'
 import { injectSeed, readSeed } from '../lib/seed'
+import { TweakPanel } from './TweakPanel'
 import {
   IconAlert,
   IconCheck,
   IconDesktop,
   IconExternal,
   IconMobile,
+  IconPalette,
   IconRefresh,
   IconShare,
   IconTablet,
@@ -20,15 +23,36 @@ interface Props {
   html: string
   checks: Check[]
   errors: string[]
+  tweak?: DesignTweak
+  onTweakSave: (next: DesignTweak | undefined) => Promise<void>
   onHeal: () => void
   onRefresh: () => void
   shareUrl: string | null
 }
 
-export function PreviewPanel({ projectId, html, checks, errors, onHeal, onRefresh, shareUrl }: Props) {
+export function PreviewPanel({ projectId, html, checks, errors, tweak, onTweakSave, onHeal, onRefresh, shareUrl }: Props) {
   const [device, setDevice] = useState<Device>('desktop')
   const [nonce, setNonce] = useState(0)
   const [showChecks, setShowChecks] = useState(false)
+  const [showTweak, setShowTweak] = useState(false)
+  const [draft, setDraft] = useState<DesignTweak>(tweak ?? {})
+  const [saving, setSaving] = useState(false)
+
+  const frameRef = useRef<HTMLIFrameElement>(null)
+  const saveTimer = useRef<number | null>(null)
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+
+  // 服务端是最终真相（刷新、回滚、换设备都以它为准），所以 prop 变了就同步草稿
+  useEffect(() => {
+    setDraft(tweak ?? {})
+  }, [tweak?.accent, tweak?.radius])
+
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) window.clearTimeout(saveTimer.current)
+    }
+  }, [])
 
   const srcDoc = useMemo(() => injectSeed(html, readSeed(projectId)), [html, projectId, nonce])
 
@@ -38,6 +62,40 @@ export function PreviewPanel({ projectId, html, checks, errors, onHeal, onRefres
   const failed = checks.filter((check) => !check.ok && check.level === 'block').length
   const health = failed > 0 ? 'bad' : warned > 0 ? 'warn' : 'ok'
   const healthLabel = failed > 0 ? `${failed} 项阻断` : warned > 0 ? `${warned} 项提醒` : `${passed} 项检查通过`
+  const supportsTokens = checks.find((check) => check.id === 'theme_vars')?.ok ?? true
+
+  /** 把草稿推给沙箱：只改变量、不重载文档，应用内的状态不会被打断。 */
+  const applyLive = (next: DesignTweak) => {
+    const win = frameRef.current?.contentWindow
+    if (!win) return
+    win.postMessage({ __nucleus_tweak: { reset: true, vars: tweakVars(next) } }, '*')
+  }
+
+  const persist = async (next: DesignTweak) => {
+    setSaving(true)
+    try {
+      await onTweakSave(Object.keys(next).length > 0 ? next : undefined)
+    } catch {
+      toast('微调没保存成功，刷新后会回到上次保存的外观')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const change = (next: DesignTweak) => {
+    setDraft(next)
+    applyLive(next)
+    // 拖动滑杆会连续触发：防抖，避免每移动 1px 就打一次接口
+    if (saveTimer.current) window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => void persist(next), 400)
+  }
+
+  const reset = () => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current)
+    setDraft({})
+    applyLive({})
+    void persist({})
+  }
 
   const openStandalone = () => {
     try {
@@ -81,6 +139,15 @@ export function PreviewPanel({ projectId, html, checks, errors, onHeal, onRefres
             <span className="dot" style={{ color: '#3bb273' }} />
             nucleus://preview/{projectId}
           </div>
+          <button
+            className={`btn sm ghost ${showTweak ? 'is-on' : ''}`}
+            onClick={() => setShowTweak((value) => !value)}
+            aria-expanded={showTweak}
+            aria-label="设计微调"
+            title="设计微调：改主色 / 圆角，不用重新生成"
+          >
+            <IconPalette size={14} /> 设计
+          </button>
           {checks.length > 0 ? (
             <button
               className={`health-pill ${health}`}
@@ -123,6 +190,10 @@ export function PreviewPanel({ projectId, html, checks, errors, onHeal, onRefres
           </button>
         </div>
 
+        {showTweak ? (
+          <TweakPanel tweak={draft} supportsTokens={supportsTokens} saving={saving} onChange={change} onReset={reset} />
+        ) : null}
+
         {showChecks && checks.length > 0 ? (
           <div className="health-panel">
             {checks.map((check) => (
@@ -141,9 +212,12 @@ export function PreviewPanel({ projectId, html, checks, errors, onHeal, onRefres
           <div className={`frame-wrap device-${device}`}>
             <iframe
               key={nonce}
+              ref={frameRef}
               title="应用预览"
               sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
               srcDoc={srcDoc}
+              // 重载后用当前草稿补一次：否则保存期间的刷新会闪回旧配色
+              onLoad={() => applyLive(draftRef.current)}
             />
           </div>
         ) : (

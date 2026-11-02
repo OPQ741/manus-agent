@@ -427,3 +427,81 @@ describe('HTTP · 我的项目与中断保留', () => {
     expect(stopped.status).toBe(409)
   })
 })
+
+describe('HTTP · 设计微调', () => {
+  async function generate(projectId: string) {
+    const response = await post(`/api/projects/${projectId}/generate`, {
+      prompt: '做一个记账应用，叫「微调账本」',
+      engine: 'local',
+    })
+    expect(response.status).toBe(200)
+    const events = await readSse(response)
+    expect(events.some((event) => event.type === 'done')).toBe(true)
+  }
+
+  it('IT-19 保存微调后，详情 / 分享 / 导出三处外观一致', async () => {
+    const project = await createProject('做一个记账应用，叫「微调账本」')
+    await generate(project.id)
+
+    const patched = await fetch(`${base}/api/projects/${project.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tweak: { accent: '#17624B', radius: 6 } }),
+    })
+    expect(patched.status).toBe(200)
+    const body = (await patched.json()) as {
+      project: { tweak?: { accent?: string; radius?: number } }
+      previewHtml: string
+    }
+    expect(body.project.tweak).toEqual({ accent: '#17624b', radius: 6 })
+    expect(body.previewHtml).toContain('--accent: #17624b;')
+    expect(body.previewHtml).toContain('--radius: 6px;')
+
+    // 刷新（重新 GET）后微调仍在 —— 这是"持久化"的关键，而不只是内存里改了一下
+    const detail = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail & {
+      previewHtml: string
+    }
+    expect(detail.project.tweak?.accent).toBe('#17624b')
+    expect(detail.previewHtml).toContain('data-nucleus="tweak"')
+
+    // 分享链接是别人看到的入口，外观必须一致
+    const share = (await (await fetch(`${base}/api/share/${project.slug}`)).json()) as { html: string }
+    expect(share.html).toContain('--accent: #17624b;')
+
+    // 导出要带走外观：ZIP 是 store 模式，正文可直接在字节里检索
+    const zip = Buffer.from(await (await fetch(`${base}/api/projects/${project.id}/export`)).arrayBuffer())
+    expect(zip.includes(Buffer.from('data-nucleus="tweak"'))).toBe(true)
+  })
+
+  it('IT-20 显式传 null 可以清除微调，恢复生成时的外观', async () => {
+    const project = await createProject('做一个待办应用，叫「微调待办」')
+    await generate(project.id)
+
+    await fetch(`${base}/api/projects/${project.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tweak: { accent: '#e11d6b' } }),
+    })
+
+    const cleared = await fetch(`${base}/api/projects/${project.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tweak: null }),
+    })
+    const body = (await cleared.json()) as { project: { tweak?: unknown }; previewHtml: string }
+    expect(body.project.tweak).toBeUndefined()
+    expect(body.previewHtml).not.toContain('data-nucleus="tweak"')
+  })
+
+  it('IT-21 非法字段被局部丢弃（不会 400，也不会写脏数据）', async () => {
+    const project = await createProject('做一个笔记应用，叫「微调笔记」')
+    const response = await fetch(`${base}/api/projects/${project.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tweak: { accent: 'chartreuse', radius: 999 } }),
+    })
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { project: { tweak?: { accent?: string; radius?: number } } }
+    expect(body.project.tweak).toEqual({ radius: 28 })
+  })
+})

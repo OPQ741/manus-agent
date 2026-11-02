@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   ApiErrorCode,
   DesignPrefs,
+  DesignTweak,
   EngineId,
   Project,
   ProjectDetail,
@@ -87,6 +88,12 @@ export const api = {
     request<{ project: Project }>(`/api/projects/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify({ name }),
+    }),
+  /** 保存设计微调；传 null 表示恢复默认。 */
+  updateTweak: (id: string, tweak: DesignTweak | null) =>
+    request<{ project: Project; previewHtml: string }>(`/api/projects/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ tweak }),
     }),
   deleteProject: (id: string) =>
     request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),

@@ -88,6 +88,14 @@ export const IconCopy = svg(
   </>,
 )
 export const IconSpark = svg(<path d="M12 3l1.9 5.6L20 10.5l-5.4 2.2L12 18l-2.6-5.3L4 10.5l6.1-1.9L12 3z" />)
+export const IconPalette = svg(
+  <>
+    <path d="M12 3a9 9 0 000 18h1.2a2.3 2.3 0 002.3-2.3c0-.6-.2-1.1-.6-1.6-.4-.4-.6-.9-.6-1.5a1.6 1.6 0 011.6-1.6H18a3 3 0 003-3 9 9 0 00-9-8z" />
+    <circle cx="8" cy="10.5" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="12.5" cy="7.8" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="16.6" cy="10.4" r="1.1" fill="currentColor" stroke="none" />
+  </>,
+)
 export const IconCheck = svg(<path d="M4 12.5l5 5L20 6.5" />)
 export const IconAlert = svg(
   <>

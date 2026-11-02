@@ -9,8 +9,9 @@
  * 否则生成的应用在解析阶段抛的错会漏捕获。
  */
 
-import type { Check, FileEntry } from '../../shared/types'
+import type { Check, DesignTweak, FileEntry } from '../../shared/types'
 import { MAX_TOTAL_BYTES } from '../../shared/types'
+import { injectTweak, usesDesignTokens } from './tweak'
 
 export interface AssembleResult {
   html: string
@@ -61,6 +62,28 @@ export function bridgeScript(): string {
   };
   post({ kind: 'ready' });
 
+  // 宿主的设计微调：直接写到 documentElement 的内联样式上。
+  // 不重载 iframe ⇒ 应用内状态、输入框内容、滚动位置全部保留；这正是"改颜色不该重新生成"的体验前提。
+  // 协议：{ __nucleus_tweak: { reset: boolean, vars: { '--accent': '#...', ... } } }
+  addEventListener('message', function (e) {
+    var t = e.data && e.data.__nucleus_tweak;
+    if (!t) return;
+    var root = document.documentElement;
+    if (!root) return;
+    if (t.reset) {
+      root.style.removeProperty('--accent');
+      root.style.removeProperty('--accent-soft');
+      root.style.removeProperty('--accent-ink');
+      root.style.removeProperty('--radius');
+    }
+    var vars = t.vars || {};
+    for (var key in vars) {
+      if (!Object.prototype.hasOwnProperty.call(vars, key)) continue;
+      if (key.indexOf('--') !== 0) continue;
+      root.style.setProperty(key, String(vars[key]));
+    }
+  });
+
   var seed = (window.__NUCLEUS_SEED && typeof window.__NUCLEUS_SEED === 'object') ? window.__NUCLEUS_SEED : {};
   var mem = {};
   for (var k in seed) { if (Object.prototype.hasOwnProperty.call(seed, k)) mem[k] = String(seed[k]); }
@@ -92,6 +115,13 @@ function pickEntry(files: Map<string, FileEntry>): FileEntry | null {
   if (html.length === 0) return null
   const preferred = html.find((f) => /^(index|main|app)\.html?$/i.test(f.path))
   return preferred ?? html[0]!
+}
+
+/** 导出时也要用同一套入口判定，避免"预览用 index.html、导出改了另一个文件"。 */
+export function entryPath(files: FileEntry[]): string | null {
+  const map = new Map<string, FileEntry>()
+  for (const file of files) map.set(file.path, file)
+  return pickEntry(map)?.path ?? null
 }
 
 function inlineStylesheets(html: string, files: Map<string, FileEntry>, inlined: string[], missing: string[]) {
@@ -146,7 +176,7 @@ function injectBridge(html: string): string {
   return bridge + '\n' + html
 }
 
-export function assemble(input: FileEntry[]): AssembleResult {
+export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResult {
   const files = new Map<string, FileEntry>()
   for (const file of input) files.set(file.path, file)
 
@@ -171,6 +201,8 @@ export function assemble(input: FileEntry[]): AssembleResult {
   let html = inlineStylesheets(entryFile.content, files, inlined, missing)
   html = inlineScripts(html, files, inlined, missing)
   html = injectBridge(html)
+  // 微调必须最后注入：它靠"后写者胜"覆盖应用自带的 :root 变量
+  html = injectTweak(html, tweak)
 
   checks.push({
     id: 'refs',
@@ -217,6 +249,16 @@ export function assemble(input: FileEntry[]): AssembleResult {
     ok: !risky,
     level: 'warn',
     detail: risky ? '检测到对父窗口的访问，预览沙箱下会被拦截' : '未发现跨窗口访问',
+  })
+
+  // 设计微调依赖设计令牌；没有令牌的应用只能调圆角，界面需要如实提示
+  const tokenized = usesDesignTokens(html)
+  checks.push({
+    id: 'theme_vars',
+    label: '可用设计令牌',
+    ok: tokenized,
+    level: 'info',
+    detail: tokenized ? '声明了 --accent / --radius，支持实时微调' : '未声明设计令牌，实时微调可能不生效',
   })
 
   return { html, entry: entryFile.path, checks, inlined, missing }
