@@ -46,6 +46,11 @@ function applyEvents(state: LiveState, events: AgentEvent[]): LiveState {
         next = clone()
         next.note = (event.text || '').slice(0, 160)
         break
+      case 'notice':
+        // 排队/换家这类提示只保留最新一条：它们描述的是"此刻在发生什么"
+        next = clone()
+        next.notice = { level: event.level, text: event.message }
+        break
       case 'file_start':
         next = clone()
         if (!next.files.some((file) => file.path === event.path)) {
@@ -412,7 +417,9 @@ export function StudioPage({ id }: { id: string }) {
               </button>
             )}
             <span className="badge accent">v{project.version}</span>
-            <span className="badge">{settings?.engine === 'cloud' ? '云模型' : '本地引擎'}</span>
+            <span className="badge" title="这次生成用的模型通道">
+              {project.providerLabel || settings?.active?.label || '模型生成'}
+            </span>
           </div>
         }
         right={

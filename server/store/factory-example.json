@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "prompt": "做一个记账应用，叫「小账本」，记录金额、分类和备注，能按分类看占比",
+  "provider": {
+    "id": "pollinations",
+    "label": "免 Key · GPT-OSS 20B",
+    "model": "openai-fast",
+    "free": true
+  },
+  "usage": {
+    "ms": 51602,
+    "chars": 7719,
+    "tokens": 6327
+  },
+  "generatedAt": 1793674821448,
+  "plan": {
+    "name": "小账本",
+    "summary": "简易记账应用，记录金额、分类和备注，支持按分类查看占比",
+    "stack": "HTML, CSS, JavaScript",
+    "steps": [
+      "创建页面结构",
+      "实现样式与主题变量",
+      "编写交互逻辑与持久化",
+      "添加分类占比图表"
+    ],
+    "files": [
+      {
+        "path": "index.html",
+        "purpose": "页面入口"
+      },
+      {
+        "path": "styles.css",
+        "purpose": "全局样式与主题变量"
+      },
+      {
+        "path": "app.js",
+        "purpose": "业务逻辑与数据持久化"
+      }
+    ]
+  },
+  "files": [
+    {
+      "path": "index.html",
+      "content": "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"UTF-8\">\n<title>小账本</title>\n<link rel=\"stylesheet\" href=\"styles.css\">\n</head>\n<body>\n<div class=\"container\">\n  <h1 class=\"title\">小账本</h1>\n  <form id=\"entry-form\" class=\"form\">\n    <div class=\"form-row\">\n      <label for=\"amount\">金额</label>\n      <input type=\"number\" id=\"amount\" name=\"amount\" placeholder=\"请输入金额\" required step=\"0.01\" min=\"0\">\n    </div>\n    <div class=\"form-row\">\n      <label for=\"category\">分类</label>\n      <input type=\"text\" id=\"category\" name=\"category\" placeholder=\"如：餐饮、交通\" required>\n    </div>\n    <div class=\"form-row\">\n      <label for=\"remark\">备注</label>\n      <input type=\"text\" id=\"remark\" name=\"remark\" placeholder=\"可选\">\n    </div>\n    <button type=\"submit\" class=\"btn primary\">添加</button>\n  </form>\n  <section id=\"entries\" class=\"entries\">\n    <h2>账单列表</h2>\n    <ul id=\"entry-list\"></ul>\n  </section>\n  <section id=\"chart\" class=\"chart\">\n    <h2>分类占比</h2>\n    <canvas id=\"pie-chart\"></canvas>\n  </section>\n</div>\n<script src=\"app.js\"></script>\n</body>\n</html>"
+    },
+    {
+      "path": "styles.css",
+      "content": ":root{\n  --accent:#4B3BFF;\n  --accent-soft:rgba(75,59,255,0.1);\n  --accent-ink:#FFFFFF;\n  --radius:14px;\n  --bg:#FBFAF8;\n  --text:#16161A;\n  --muted:#6E6E78;\n  --border:#E9E7E2;\n  --shadow:0 1px 2px rgba(0,0,0,0.08);\n}\n*{box-sizing:border-box;margin:0;padding:0}\nbody{font-family:-apple-system,\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif;background:var(--bg);color:var(--text);line-height:1.6}\n.container{max-width:880px;margin:auto;padding:0 16px}\n.title{font-weight:650;margin:24px 0 16px}\n.form{display:flex;flex-wrap:wrap;gap:8px}\n.form-row{flex:1 1 200px;display:flex;flex-direction:column}\n.form-row label{font-size:14px;margin-bottom:4px}\n.form-row input{padding:8px;border:1px solid var(--border);border-radius:var(--radius);font-size:15px}\n.form-row input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}\n.btn{padding:10px 16px;border-radius:var(--radius);font-size:15px;cursor:pointer}\n.btn.primary{background:var(--accent);color:var(--accent-ink);border:none}\n.btn.primary:hover{opacity:.9}\n.btn.secondary{background:none;border:1px solid var(--accent);color:var(--accent)}\n.btn.secondary:hover{background:var(--accent-soft)}\n.entries, .chart{margin-top:32px}\n.entries h2, .chart h2{font-weight:650;margin-bottom:12px}\n#entry-list{list-style:none}\n.entry-item{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)}\n.entry-item:last-child{border-bottom:none}\n.entry-amount{font-variant-numeric:tabular-nums}\n@media (max-width:560px){\n  .form{flex-direction:column}\n  .btn{width:100%}\n  .title{font-size:24px}\n}"
+    },
+    {
+      "path": "app.js",
+      "content": "// 数据结构：{id, amount, category, remark, timestamp}\nconst STORAGE_KEY = 'nucleus:smallbook';\nconst form = document.getElementById('entry-form');\nconst listEl = document.getElementById('entry-list');\nconst chartCanvas = document.getElementById('pie-chart');\nlet chart;\n\n// 防 XSS 转义\nfunction escapeHTML(str) {\n  return String(str).replace(/[&<>\"']/g, function (c) {\n    return {\n      '&': '&amp;',\n      '<': '&lt;',\n      '>': '&gt;',\n      '\"': '&quot;',\n      \"'\": '&#39;'\n    }[c];\n  });\n}\n\n// 本地存储\nfunction loadData() {\n  return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');\n}\nfunction saveData(data) {\n  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));\n}\n\n// 渲染列表\nfunction renderList() {\n  const data = loadData();\n  listEl.innerHTML = '';\n  if (data.length === 0) {\n    const li = document.createElement('li');\n    li.textContent = '暂无账单，快来添加吧！';\n    li.style.padding = '8px 0';\n    listEl.appendChild(li);\n    return;\n  }\n  data.forEach(item => {\n    const li = document.createElement('li');\n    li.className = 'entry-item';\n    li.innerHTML = `<span>${escapeHTML(item.category)}</span><span class=\"entry-amount\">${item.amount.toFixed(2)}</span>`;\n    listEl.appendChild(li);\n  });\n}\n\n// 渲染图表\nfunction renderChart() {\n  const data = loadData();\n  const totals = {};\n  data.forEach(i => {\n    totals[i.category] = (totals[i.category] || 0) + i.amount;\n  });\n  const labels = Object.keys(totals);\n  const values = labels.map(l => totals[l]);\n\n  if (!chartCanvas) return;\n\n  // 若 Chart 已加载\n  if (typeof Chart !== 'undefined') {\n    if (chart) chart.destroy();\n    chart = new Chart(chartCanvas, {\n      type: 'pie',\n      data: {\n        labels,\n        datasets: [{\n          data: values,\n          backgroundColor: labels.map(() => 'var(--accent)')\n        }]\n      },\n      options: {\n        responsive: true,\n        plugins: {\n          legend: { position: 'bottom' }\n        }\n      }\n    });\n  }\n}\n\n// 载入 Chart.js CDN\nfunction loadChartLib(callback) {\n  if (typeof Chart !== 'undefined') {\n    callback();\n    return;\n  }\n  const script = document.createElement('script');\n  script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';\n  script.onload = callback;\n  script.onerror = () => {\n    console.error('Chart.js 加载失败');\n  };\n  document.head.appendChild(script);\n}\n\n// 表单提交\nform.addEventListener('submit', e => {\n  e.preventDefault();\n  const amount = parseFloat(form.amount.value);\n  const category = form.category.value.trim();\n  const remark = form.remark.value.trim();\n  if (isNaN(amount) || !category) {\n    alert('请填写金额和分类');\n    return;\n  }\n  const entry = {\n    id: Date.now(),\n    amount,\n    category,\n    remark,\n    timestamp: Date.now()\n  };\n  const data = [...loadData(), entry];\n  saveData(data);\n  renderList();\n  renderChart();\n  form.reset();\n});\n\n// 初始化\ndocument.addEventListener('DOMContentLoaded', () => {\n  renderList();\n  loadChartLib(() => {\n    renderChart();\n  });\n});"
+    }
+  ]
+}

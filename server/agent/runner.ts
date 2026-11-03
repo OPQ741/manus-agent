@@ -3,23 +3,41 @@
  *
  * 输出只有一种东西：AgentEvent 流。它不知道 HTTP，不知道数据库，
  * 因此可以被任何传输层复用（SSE / 测试 / 未来的 WebSocket）。
+ *
+ * 这里**没有**第二条生成路径：以前有个 LocalEngine（写死七类配方的本地编译器），
+ * 它会让"没配 Key 也能生成"变成假的 —— 用户以为在调模型，其实在跑模板。
+ * 现在唯一的引擎是 ModelEngine，它必须打到一个真实模型上，打不到就直接报错。
  */
 
-import type { AgentEvent, Check, DesignPrefs, EngineId, FileEntry, Plan, Usage } from '../../shared/types'
+import type {
+  AgentEvent,
+  ApiErrorCode,
+  Check,
+  DesignPrefs,
+  FileEntry,
+  Plan,
+  ProviderId,
+  ProviderInfo,
+  Usage,
+} from '../../shared/types'
 import { assemble } from '../preview/assemble'
-import { compose, planFor, slotsFor, type Slots } from './composer'
 import { LlmError, streamChat, type LlmConfig } from './llm'
-import { editTurnMessages, firstTurnMessages } from './prompts'
+import type { ResolvedProvider } from './providers'
+import { editTurnMessages, firstTurnMessages, repairMessages } from './prompts'
 import { ProtocolParser } from './protocol'
 
 export interface GenContext {
   prompt: string
   design: DesignPrefs
-  engine: EngineId
   files: FileEntry[]
   plan: Plan | null
-  llm?: LlmConfig
   signal?: AbortSignal
+  /**
+   * 修复轮：非空时本轮**只**重新输出这些文件（其余保持不动），
+   * reason 会原样告诉模型上一次是哪里不对（没输出 / 被截断 / 语法不通）。
+   * 由编排层在 assemble 之后设置。
+   */
+  repair?: { path: string; reason: string }[]
 }
 
 /** 生成结束后的产物，交给路由层持久化。 */
@@ -32,93 +50,94 @@ export interface GenSink {
   plan: Plan | null
   checks: Check[]
   warnings: string[]
+  /** assemble 发现"被引用但没生成"的文件：驱动修复轮（见 index.ts 的 repair pass）。 */
+  missing: string[]
+  /** assemble 发现语法就不通的脚本：同样进修复轮。 */
+  broken: string[]
+  /** 闭合标签没等到、写到一半就断的文件：内容不可信，必须重出。 */
+  truncated: Set<string>
   raw: string
   usage: Usage
 }
 
 export interface AgentEngine {
-  id: EngineId
+  readonly id: ProviderId
+  readonly info: ProviderInfo
   plan(ctx: GenContext): Promise<Plan>
-  write(ctx: GenContext, plan: Plan): AsyncIterable<string>
+  write(ctx: GenContext): AsyncIterable<string>
 }
 
-function chunkText(text: string, size: number): string[] {
-  const chunks: string[] = []
-  for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size))
-  return chunks
-}
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
-
-/** 本地引擎：确定性编译 + 人为分块（让上层只有一条流式链路）。 */
-export class LocalEngine implements AgentEngine {
-  readonly id = 'local' as const
-
-  async plan(ctx: GenContext): Promise<Plan> {
-    return planFor(slotsFor(ctx.prompt, ctx.design, ctx.files))
-  }
-
-  async *write(ctx: GenContext, _plan: Plan): AsyncGenerator<string> {
-    const { text } = compose(ctx.prompt, ctx.design, ctx.files)
-    for (const chunk of chunkText(text, 720)) {
-      if (ctx.signal?.aborted) return
-      yield chunk
-      await sleep(55)
-    }
+/**
+ * 占位方案：模型自己的 plan 会在流里覆盖它。
+ *
+ * 名字从 prompt 里捞（引号内的应用名优先），捞不到就用需求开头 ——
+ * 这一步不调模型，纯粹是为了让用户在首字节之前就看到"它在做什么"。
+ */
+export function placeholderPlan(prompt: string): Plan {
+  const quoted = /(?:叫|名为|名称是|名字叫)\s*[「"'“]([^」"'”]{1,16})[」"'”]/.exec(prompt)?.[1]
+  const name = quoted?.trim() || prompt.replace(/\s+/g, ' ').trim().slice(0, 12) || '新应用'
+  return {
+    name,
+    summary: prompt.trim().slice(0, 60),
+    stack: '由模型决定的 HTML / CSS / JavaScript',
+    steps: ['理解需求', '生成结构、样式与逻辑', '静态自检'],
+    files: [],
   }
 }
 
-/** 云模型引擎：把 LLM 的增量原样上抛，协议解析留给上层。 */
-export class CloudEngine implements AgentEngine {
-  readonly id = 'cloud' as const
+/** 真实模型引擎：把上游的增量原样上抛，协议解析留给上层。 */
+export class ModelEngine implements AgentEngine {
+  readonly id: ProviderId
+  readonly info: ProviderInfo
   private readonly config: LlmConfig
   /** 上游回报的 token 用量（部分兼容服务在最后一帧带 usage）。 */
-  private lastUsage: Usage | null = null
-
-  constructor(config: LlmConfig) {
-    this.config = config
+  private lastUsage: { tokens?: number } | null = null
+  private readonly onUsage = (usage: { tokens?: number }) => {
+    this.lastUsage = { tokens: usage.tokens }
   }
 
-  /** runner 在 done 事件里合并这个值，前端才能显示真实 token 而不是空。 */
+  constructor(provider: ResolvedProvider) {
+    this.id = provider.profile.id
+    this.info = { id: provider.profile.id, label: provider.profile.label, model: provider.profile.model, free: Boolean(provider.profile.free) }
+    this.config = {
+      baseUrl: provider.profile.baseUrl,
+      apiKey: provider.apiKey,
+      model: provider.profile.model,
+      maxTokens: provider.profile.maxTokens,
+      temperature: provider.profile.temperature,
+      reasoningEffort: provider.profile.reasoningEffort,
+      headers: provider.profile.headers,
+    }
+  }
+
   get usage(): { tokens?: number } | null {
     return this.lastUsage
   }
 
   async plan(ctx: GenContext): Promise<Plan> {
-    const slots: Slots = slotsFor(ctx.prompt, ctx.design, ctx.files)
-    // 先给一张"占位方案"，模型真正的 plan 会在流里覆盖它，用户不必等首字节。
-    return {
-      name: slots.name || '新应用',
-      summary: ctx.prompt.slice(0, 60),
-      stack: 'HTML + CSS + JavaScript（模型生成）',
-      steps: ['理解需求', '生成结构、样式与逻辑', '静态自检'],
-      files: [],
-    }
+    return placeholderPlan(ctx.prompt)
   }
 
-  async *write(ctx: GenContext, _plan: Plan): AsyncGenerator<string> {
+  async *write(ctx: GenContext): AsyncGenerator<string> {
+    if (ctx.repair?.length) {
+      for await (const delta of streamChat(this.config, repairMessages(ctx.prompt, ctx.design, ctx.files, ctx.repair, ctx.plan), {
+        signal: ctx.signal,
+        onUsage: this.onUsage,
+      })) {
+        yield delta
+      }
+      return
+    }
+
     const messages =
       ctx.files.length > 0
         ? editTurnMessages(ctx.prompt, ctx.design, ctx.files, ctx.plan)
         : firstTurnMessages(ctx.prompt, ctx.design)
 
-    for await (const delta of streamChat(this.config, messages, {
-      signal: ctx.signal,
-      onUsage: (usage) => {
-        this.lastUsage = { ms: 0, engine: 'cloud', chars: 0, tokens: usage.tokens }
-      },
-    })) {
+    for await (const delta of streamChat(this.config, messages, { signal: ctx.signal, onUsage: this.onUsage })) {
       yield delta
     }
   }
-}
-
-export function createEngine(engine: EngineId, ctx: GenContext): AgentEngine {
-  if (engine === 'cloud') {
-    if (!ctx.llm) throw new LlmError('engine_unconfigured', '云模型未配置，请到设置里填写模型地址与 Key')
-    return new CloudEngine(ctx.llm)
-  }
-  return new LocalEngine()
 }
 
 /**
@@ -131,18 +150,24 @@ export async function* runGeneration(
   sink: GenSink,
 ): AsyncGenerator<AgentEvent> {
   const started = Date.now()
+  const isRepair = Boolean(ctx.repair?.length)
 
   yield { type: 'stage', stage: 'plan', status: 'running' }
-  let plan: Plan
-  try {
-    plan = await engine.plan(ctx)
-  } catch (error) {
-    yield toErrorEvent(error)
-    return
+  if (isRepair) {
+    // 修复轮不重发方案：否则占位方案会把已经定稿的应用名覆盖成"修复 app.js…"
+    yield { type: 'stage', stage: 'plan', status: 'done' }
+  } else {
+    let plan: Plan
+    try {
+      plan = await engine.plan(ctx)
+    } catch (error) {
+      yield toErrorEvent(error)
+      return
+    }
+    sink.plan = plan
+    yield { type: 'plan', plan }
+    yield { type: 'stage', stage: 'plan', status: 'done' }
   }
-  sink.plan = plan
-  yield { type: 'plan', plan }
-  yield { type: 'stage', stage: 'plan', status: 'done' }
 
   yield { type: 'stage', stage: 'write', status: 'running' }
 
@@ -153,22 +178,27 @@ export async function* runGeneration(
       files.set(event.path, event.content)
       // 只有"正常闭合"的文件才算写完；被截断的（流断了/模型忘了闭合）
       // 在中断保留时要回退到旧版本，不能当成完整产物。
-      if (!event.truncated) sink.completed.add(event.path)
-      else sink.completed.delete(event.path)
+      if (!event.truncated) {
+        sink.completed.add(event.path)
+        sink.truncated.delete(event.path)
+      } else {
+        sink.completed.delete(event.path)
+        sink.truncated.add(event.path)
+      }
     } else if (event.type === 'delete') {
       files.delete(event.path)
       sink.completed.delete(event.path)
       sink.deleted.add(event.path)
     } else if (event.type === 'plan') {
+      // 模型自己输出的方案优先级最高（它会覆盖占位方案）
       sink.plan = event.plan
-      plan = event.plan
     } else if (event.type === 'warning') {
       sink.warnings.push(event.message)
     }
   }
 
   try {
-    for await (const chunk of engine.write(ctx, plan)) {
+    for await (const chunk of engine.write(ctx)) {
       sink.raw += chunk
       if (ctx.signal?.aborted) break
       const events = parser.push(chunk)
@@ -206,6 +236,8 @@ export async function* runGeneration(
   }))
   const result = assemble(fileList)
   sink.checks = result.checks
+  sink.missing = result.missing
+  sink.broken = result.broken
   for (const check of result.checks) {
     yield { type: 'check', check }
   }
@@ -213,14 +245,39 @@ export async function* runGeneration(
 
   const usage: Usage = {
     ms: Date.now() - started,
-    engine: engine.id,
+    provider: engine.id,
     chars: sink.raw.length,
   }
   // 上游若回报了 usage，就带上真实 token；带不到就留空，界面按字符数展示（不编造数字）。
   const reported = (engine as { usage?: { tokens?: number } | null }).usage
   if (reported?.tokens) usage.tokens = reported.tokens
   sink.usage = usage
-  yield { type: 'done', version: 0, usage }
+  yield { type: 'done', version: 0, usage, provider: engine.info }
+}
+
+/**
+ * 哪些错误值得换一家模型再试。
+ *
+ * 判据有两条，缺一不可：
+ *  - 错误码属于"这家不行"（鉴权 / 限流 / 网络 / 超时 / 没按协议出码），
+ *    而不是"这次请求本身有问题"（internal）；
+ *  - 还没有任何产出（raw 为空且没写完文件）—— 已经吐了一半再换家，
+ *    用户会看到两份互相覆盖的代码，比直接失败更糟。
+ *
+ * 注意 llm_auth 也在里面：访客自己的 Key 填错时，退回免 Key 通道比硬失败友好得多，
+ * 而编排层会先发一条 notice 说明"这家不行、换下一家"，不会让人误以为 Key 是好的。
+ */
+const FAILOVER_CODES = new Set<ApiErrorCode>([
+  'llm_auth',
+  'llm_quota',
+  'llm_timeout',
+  'llm_network',
+  'protocol_error',
+])
+
+export function canFailover(code: ApiErrorCode | undefined, sink: GenSink): boolean {
+  if (!code || !FAILOVER_CODES.has(code)) return false
+  return sink.raw.length === 0 && sink.completed.size === 0
 }
 
 export function toErrorEvent(error: unknown): AgentEvent {
@@ -239,7 +296,10 @@ export function createSink(files: FileEntry[], plan: Plan | null): GenSink {
     plan,
     checks: [],
     warnings: [],
+    missing: [],
+    broken: [],
+    truncated: new Set<string>(),
     raw: '',
-    usage: { ms: 0, engine: 'local', chars: 0 },
+    usage: { ms: 0, provider: '', chars: 0 },
   }
 }

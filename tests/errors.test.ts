@@ -16,7 +16,7 @@ describe('errors · 错误码映射', () => {
       'llm_timeout',
       'llm_network',
       'protocol_error',
-      'engine_unconfigured',
+      'provider_unavailable',
       'busy',
       'not_found',
       'bad_request',
@@ -32,14 +32,16 @@ describe('errors · 错误码映射', () => {
 
   it('UT-ERR-02 鉴权与额度问题引导去设置或重试', () => {
     expect(explainError('llm_auth', '').action.kind).toBe('settings')
-    expect(explainError('engine_unconfigured', '').action.kind).toBe('settings')
+    expect(explainError('provider_unavailable', '').action.kind).toBe('settings')
     expect(explainError('llm_quota', '').action.kind).toBe('retry')
   })
 
-  it('UT-ERR-03 未配置引擎时明确指向设置页', () => {
-    const info = explainError('engine_unconfigured', '')
-    expect(info.hint).toContain('模型地址')
+  it('UT-ERR-03 没有可用模型通道时明确指向设置页（不再有"退回本地"这条路）', () => {
+    const info = explainError('provider_unavailable', '')
+    expect(info.hint).toContain('Key')
     expect(info.action.label).toContain('设置')
+    // 旧契约里的 engine_unconfigured 必须已经消失，否则说明还有本地引擎的入口
+    expect(explainError('engine_unconfigured', '')).not.toBe(info)
   })
 
   it('UT-ERR-04 项目不存在时给出回首页的动作', () => {

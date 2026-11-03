@@ -107,6 +107,8 @@ export function HomePage() {
           <p>
             描述你的想法，Agent 会先给方案、再逐文件写代码，然后直接在沙箱里跑起来。
             不满意就继续说，随时能退回上一版。
+            <br />
+            代码由<strong>真实大模型</strong>生成，默认走免 Key 通道，无需注册；也可以换成你自己的模型 Key。
           </p>
         </div>
 
@@ -213,7 +215,7 @@ export function HomePage() {
                   <h3>{project.name}</h3>
                   <div className="spacer" />
                   {project.createdBy === me ? <span className="badge accent">我创建的</span> : null}
-                  <span className="badge">{project.engine === 'local' ? '本地引擎' : '云模型'}</span>
+                  <span className="badge">{project.providerLabel || '模型生成'}</span>
                 </div>
                 <p>{project.summary || '还没有描述'}</p>
                 <footer>

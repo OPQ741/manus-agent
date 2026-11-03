@@ -1,30 +1,61 @@
 /**
  * 集成测试：真起一个 HTTP 服务（随机端口），用 fetch 走完整业务流程。
  *
- * 覆盖 PRD §8 的后端部分，并包含一条"假上游模型"链路 —— 它证明
- * 云模型分支的流式解析、错误映射与本地引擎走的是同一套代码。
+ * 关键前提：本地编译器已经删掉，所以这里**没有**"不调模型也能生成"的捷径 ——
+ * 每条生成链路都打到一个假的 OpenAI 兼容上游（tests/fake-upstream.ts）上，
+ * 走真实的 SSE 传输、协议解析、组装自检与落库。测的是我们这一侧，不是上游。
+ *
+ * 覆盖 PRD §8 的后端部分 + 模型通道解析（预设 / 自带 Key / 排队 / 故障转移）。
  */
 
 process.env.NUCLEUS_ALLOW_LOCAL_LLM = '1'
 
-import { createServer as createHttpServer, type Server } from 'node:http'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { AgentEvent, ProjectDetail } from '../shared/types'
+import type { AgentEvent, ProjectDetail, PublicSettings } from '../shared/types'
 import { tweakPayload } from '../shared/tweak'
+import type { ProviderProfile, ResolvedCatalog } from '../server/agent/providers'
+import { resetGates } from '../server/agent/queue'
 import { createNucleusServer } from '../server/index'
 import { listZipEntries } from '../server/export/zip'
+import { nwfFor, nwfJsOnly, nwfMissingJs, startFakeUpstream, type FakeUpstream } from './fake-upstream'
 
 let dir: string
-let server: Server
-let base: string
+let fake: FakeUpstream
+let server: Awaited<ReturnType<typeof createNucleusServer>>['server']
+let base = ''
 let close: () => Promise<void>
+
+function profile(over: Partial<ProviderProfile> = {}): ProviderProfile {
+  return {
+    id: 'fake',
+    label: '假上游模型',
+    baseUrl: fake.url,
+    model: 'fake-model',
+    maxTokens: 4096,
+    reasoningEffort: 'low',
+    ...over,
+  }
+}
+
+function catalogOf(entries: { profile: ProviderProfile; apiKey: string }[], defaultId = entries[0]?.profile.id ?? ''): ResolvedCatalog {
+  return {
+    entries: entries.map((entry) => ({ ...entry, ready: Boolean(entry.profile.free) || Boolean(entry.apiKey) })),
+    defaultId,
+    ready: entries.length > 0,
+  }
+}
 
 beforeAll(async () => {
   dir = await fs.mkdtemp(join(tmpdir(), 'nucleus-http-'))
-  const created = await createNucleusServer({ dataDir: dir, clientDir: join(dir, 'nope') })
+  fake = await startFakeUpstream()
+  const created = await createNucleusServer({
+    dataDir: dir,
+    clientDir: join(dir, 'nope'),
+    catalog: catalogOf([{ profile: profile(), apiKey: 'sk-fake' }]),
+  })
   server = created.server
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
@@ -38,6 +69,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await close?.()
+  await fake?.close()
   await fs.rm(dir, { recursive: true, force: true })
 })
 
@@ -73,13 +105,42 @@ async function createProject(prompt = '做一个记账应用，叫「集成测�
   return body.project
 }
 
+/** 起一个临时实例（自带 catalog / 数据目录），用于需要不同通道配置的用例。 */
+async function withServer<T>(
+  catalog: ResolvedCatalog,
+  run: (base: string) => Promise<T>,
+): Promise<T> {
+  const dataDir = await fs.mkdtemp(join(tmpdir(), 'nucleus-case-'))
+  const created = await createNucleusServer({ dataDir, clientDir: join(dataDir, 'nope'), catalog })
+  await new Promise<void>((resolve) => created.server.listen(0, '127.0.0.1', resolve))
+  const address = created.server.address()
+  const port = typeof address === 'object' && address ? address.port : 0
+  try {
+    return await run(`http://127.0.0.1:${port}`)
+  } finally {
+    await new Promise<void>((resolve) => created.server.close(() => resolve()))
+    await fs.rm(dataDir, { recursive: true, force: true })
+  }
+}
+
+async function newProjectOn(base: string, prompt: string) {
+  const response = await fetch(base + '/api/projects', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  })
+  const body = (await response.json()) as { project: { id: string } }
+  return body.project.id
+}
+
 describe('HTTP · 基础', () => {
-  it('IT-15 健康检查', async () => {
+  it('IT-15 健康检查报出实际生效的模型通道', async () => {
     const response = await fetch(base + '/api/health')
     expect(response.status).toBe(200)
-    const body = (await response.json()) as { ok: boolean; engine: string }
+    const body = (await response.json()) as { ok: boolean; provider: string; providers: string[] }
     expect(body.ok).toBe(true)
-    expect(body.engine).toBe('local')
+    expect(body.provider).toBe('fake')
+    expect(body.providers).toContain('fake')
   })
 
   it('IT-01 创建项目', async () => {
@@ -106,18 +167,28 @@ describe('HTTP · 基础', () => {
     expect(((await response.json()) as { error: string }).error).toBe('not_found')
   })
 
-  it('IT-10 选云模型但未配置时给出 412', async () => {
-    const project = await createProject()
-    const response = await post(`/api/projects/${project.id}/generate`, { prompt: '做个记账', engine: 'cloud' })
-    expect(response.status).toBe(412)
-    expect(((await response.json()) as { error: string }).error).toBe('engine_unconfigured')
+  it('IT-10 没有任何就绪通道时给出 412（不再有"退回本地"这条路）', async () => {
+    const empty = catalogOf([])
+    empty.ready = false
+    await withServer(empty, async (url) => {
+      const id = await newProjectOn(url, '做个记账')
+      const response = await fetch(`${url}/api/projects/${id}/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt: '做个记账' }),
+      })
+      expect(response.status).toBe(412)
+      expect(((await response.json()) as { error: string }).error).toBe('provider_unavailable')
+    })
   })
 })
 
-describe('HTTP · 生成主流程', () => {
-  it('IT-02 本地引擎生成并落库', async () => {
+describe('HTTP · 生成主流程（全部经模型）', () => {
+  it('IT-02 模型生成并落库', async () => {
     const project = await createProject()
-    const response = await post(`/api/projects/${project.id}/generate`, { prompt: '做一个记账应用，叫「集成测试账本」' })
+    const response = await post(`/api/projects/${project.id}/generate`, {
+      prompt: '做一个记账应用，叫「集成测试账本」',
+    })
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toContain('text/event-stream')
 
@@ -137,6 +208,15 @@ describe('HTTP · 生成主流程', () => {
     expect(detail.versions).toHaveLength(1)
     expect(detail.previewHtml).toContain('data-nucleus="bridge"')
     expect(detail.messages.some((message) => message.role === 'user')).toBe(true)
+    // 项目上必须记得这次是哪家模型生成的
+    expect(detail.project.provider).toBe('fake')
+    expect(detail.project.providerLabel).toBe('假上游模型')
+    // 发给上游的请求体必须带上预设里的输出预算与推理强度：
+    // 少了 max_tokens，一个应用会被上游的小默认值从中间截断；
+    // 少了 reasoning_effort，思考型模型会把预算全花在"想"上、正文写不完。
+    const body = fake.lastBody() as { max_tokens?: number; reasoning_effort?: string }
+    expect(body.max_tokens).toBe(4096)
+    expect(body.reasoning_effort).toBe('low')
   })
 
   it('IT-03 迭代生成产生新版本且文件变化', async () => {
@@ -167,14 +247,31 @@ describe('HTTP · 生成主流程', () => {
   })
 
   it('IT-09 并发生成第二个请求被拒（409）', async () => {
-    const project = await createProject()
-    const first = post(`/api/projects/${project.id}/generate`, { prompt: '做一个待办清单' })
-    // 让第一个请求先进入 running 状态
-    await new Promise((resolve) => setTimeout(resolve, 40))
-    const second = await post(`/api/projects/${project.id}/generate`, { prompt: '做一个待办清单' })
-    expect(second.status).toBe(409)
-    expect(((await second.json()) as { error: string }).error).toBe('busy')
-    await (await first).text()
+    fake.setMode('slow')
+    try {
+      const project = await createProject()
+      const first = post(`/api/projects/${project.id}/generate`, { prompt: '做一个待办清单' })
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      const second = await post(`/api/projects/${project.id}/generate`, { prompt: '做一个待办清单' })
+      expect(second.status).toBe(409)
+      expect(((await second.json()) as { error: string }).error).toBe('busy')
+      await (await first).text()
+    } finally {
+      fake.setMode('ok')
+    }
+  })
+
+  it('上游活着但不按协议出码 → protocol_error，且不产生版本', async () => {
+    fake.setMode('empty')
+    try {
+      const project = await createProject('什么都不按规矩来')
+      const events = await readSse(await post(`/api/projects/${project.id}/generate`, { prompt: '什么都不按规矩来' }))
+      expect(events.find((event) => event.type === 'error')).toMatchObject({ code: 'protocol_error' })
+      const detail = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail
+      expect(detail.project.version).toBe(0)
+    } finally {
+      fake.setMode('ok')
+    }
   })
 })
 
@@ -198,9 +295,10 @@ describe('HTTP · 导出与分享', () => {
 
     const response = await fetch(`${base}/api/share/${project.slug}`)
     expect(response.status).toBe(200)
-    const body = (await response.json()) as { html: string; project: { name: string } }
+    const body = (await response.json()) as { html: string; project: { name: string; providerLabel: string } }
     expect(body.html).toContain('data-nucleus="bridge"')
     expect(body.project.name).toBeTruthy()
+    expect(body.project.providerLabel).toBe('假上游模型')
 
     const pretty = await fetch(`${base}/p/${project.slug}`, { redirect: 'manual' })
     expect(pretty.status).toBe(302)
@@ -213,61 +311,13 @@ describe('HTTP · 导出与分享', () => {
   })
 })
 
-describe('HTTP · 设置与云模型链路', () => {
-  let fakeUpstream: Server
-  let fakeUrl = ''
-  let mode: 'ok' | 'unauthorized' = 'ok'
-
-  beforeAll(async () => {
-    fakeUpstream = createHttpServer((req, res) => {
-      if (mode === 'unauthorized') {
-        res.writeHead(401, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: { message: 'invalid api key' } }))
-        return
-      }
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-      const protocol = [
-        '<plan>{"name":"云端应用","summary":"来自模型","stack":"HTML","steps":["a"],"files":[{"path":"index.html","purpose":"入口"}]}</plan>\n',
-        '<file path="index.html">\n<!DOCTYPE html><html><head><link rel="stylesheet" href="styles.css"></head><body><h1>hello</h1><script src="app.js"></script></body></html>\n</file>\n',
-        '<file path="styles.css">\nbody{color:#111}\n</file>\n',
-        '<file path="app.js">\nconsole.log("from model")\n</file>\n',
-      ]
-      let index = 0
-      const timer = setInterval(() => {
-        if (index >= protocol.length) {
-          // 末尾带一帧 usage：真实兼容服务在 stream_options.include_usage 下就是这么发的，
-          // 用它守住"token 用量能穿过 runner 落到 done 事件"。
-          res.write(`data: ${JSON.stringify({ usage: { total_tokens: 4321 } })}\n\n`)
-          res.write('data: [DONE]\n\n')
-          res.end()
-          clearInterval(timer)
-          return
-        }
-        const piece = protocol[index++]!
-        // 故意把一个 file 标签切成两半，验证跨帧解析
-        const cut = piece.length > 40 ? Math.floor(piece.length / 2) : piece.length
-        for (const slice of [piece.slice(0, cut), piece.slice(cut)]) {
-          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: slice } }] })}\n\n`)
-        }
-      }, 10)
-      req.on('close', () => clearInterval(timer))
-    })
-    await new Promise<void>((resolve) => fakeUpstream.listen(0, '127.0.0.1', resolve))
-    const address = fakeUpstream.address()
-    const port = typeof address === 'object' && address ? address.port : 0
-    fakeUrl = `http://127.0.0.1:${port}/v1`
-  })
-
-  afterAll(async () => {
-    await new Promise<void>((resolve) => fakeUpstream.close(() => resolve()))
-  })
-
-  it('IT-13 设置读写：Key 只回显掩码', async () => {
+describe('HTTP · 模型通道解析', () => {
+  it('IT-13 设置读写：Key 只回显掩码，目录不含 Key', async () => {
     const update = await fetch(base + '/api/settings', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        engine: 'cloud',
+        provider: 'custom',
         baseUrl: 'https://api.example.com/v1/',
         model: 'gpt-test',
         apiKey: 'sk-test-1234567890',
@@ -275,18 +325,23 @@ describe('HTTP · 设置与云模型链路', () => {
       }),
     })
     expect(update.status).toBe(200)
-    const body = (await update.json()) as { apiKeyMasked: string; hasKey: boolean; baseUrl: string; cloudReady: boolean }
+    const body = (await update.json()) as PublicSettings
     expect(body.hasKey).toBe(true)
     expect(body.apiKeyMasked).toBe('sk-****7890')
     expect(body.baseUrl).toBe('https://api.example.com/v1')
-    expect(body.cloudReady).toBe(true)
+    expect(body.active?.id).toBe('custom')
+    expect(body.providers.length).toBeGreaterThan(0)
+    expect(JSON.stringify(body)).not.toContain('1234567890')
 
-    // 复原：设置是全局的，不还原会污染后面的用例（默认引擎被改成 cloud）
-    await fetch(base + '/api/settings', {
+    // 复原：设置是全局的，不清掉会污染后面的用例（自带 Key 优先级最高）
+    const cleared = await fetch(base + '/api/settings', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ engine: 'local' }),
+      body: JSON.stringify({ provider: '', baseUrl: '', model: '', apiKey: '' }),
     })
+    const after = (await cleared.json()) as PublicSettings
+    expect(after.hasKey).toBe(false)
+    expect(after.active?.id).toBe('fake')
   })
 
   it('拒绝内网模型地址（SSRF 防护）', async () => {
@@ -300,46 +355,209 @@ describe('HTTP · 设置与云模型链路', () => {
     process.env.NUCLEUS_ALLOW_LOCAL_LLM = '1'
   })
 
-  it('IT-11 云模型链路（假上游，跨帧切割）', async () => {
-    mode = 'ok'
+  it('IT-11 访客自带 Key 时优先打他自己的通道', async () => {
+    fake.setMode('ok')
     await fetch(base + '/api/settings', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ engine: 'cloud', baseUrl: fakeUrl, model: 'fake-model', apiKey: 'sk-fake' }),
+      body: JSON.stringify({ provider: 'custom', baseUrl: fake.url, model: 'my-model', apiKey: 'sk-mine' }),
     })
-    const project = await createProject('让模型生成一个页面')
-    const events = await readSse(
-      await post(`/api/projects/${project.id}/generate`, { prompt: '让模型生成一个页面', engine: 'cloud' }),
-    )
-
-    expect(events.some((event) => event.type === 'plan')).toBe(true)
-    // 上游回报的 token 用量必须穿过 runner 落到 done 事件（界面上要能如实展示）
-    const done = events.find((event) => event.type === 'done')
-    expect(done).toMatchObject({ type: 'done', usage: { engine: 'cloud', tokens: 4321 } })
-    const fileEnds = events.filter((event) => event.type === 'file_end')
-    expect(fileEnds.map((event) => (event.type === 'file_end' ? event.path : ''))).toEqual([
-      'index.html',
-      'styles.css',
-      'app.js',
-    ])
-
-    const detail = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail
-    expect(detail.project.files.some((file) => file.content.includes('from model'))).toBe(true)
-    expect(detail.project.version).toBe(1)
+    try {
+      const before = fake.calls()
+      const project = await createProject('让模型生成一个页面')
+      const events = await readSse(
+        await post(`/api/projects/${project.id}/generate`, { prompt: '让模型生成一个页面' }),
+      )
+      const done = events.find((event) => event.type === 'done')
+      expect(done).toMatchObject({ type: 'done', usage: { provider: 'custom', tokens: 4321 } })
+      expect(fake.calls()).toBeGreaterThan(before)
+      // 自带 Key 时走的是 custom 通道：max_tokens 必须带上，否则应用会被从中间截断。
+      // reasoning_effort 不在这里断言 —— 那是服务端预设的属性，用户自己的网关未必支持，
+      // 我们不该替别人决定要发什么非标准字段。
+      expect(fake.lastBody()?.max_tokens).toBeGreaterThan(1000)
+      const fileEnds = events.filter((event) => event.type === 'file_end')
+      expect(fileEnds.map((event) => (event.type === 'file_end' ? event.path : ''))).toEqual([
+        'index.html',
+        'styles.css',
+        'app.js',
+      ])
+      const detail = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail
+      expect(detail.project.provider).toBe('custom')
+      expect(detail.project.version).toBe(1)
+    } finally {
+      await fetch(base + '/api/settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: '', baseUrl: '', model: '', apiKey: '' }),
+      })
+    }
   })
 
-  it('IT-12 上游 401 被映射成 llm_auth 且不污染项目', async () => {
-    mode = 'unauthorized'
-    const project = await createProject('触发 401')
-    const events = await readSse(await post(`/api/projects/${project.id}/generate`, { prompt: '触发 401', engine: 'cloud' }))
-    const error = events.find((event) => event.type === 'error')
-    expect(error).toMatchObject({ type: 'error', code: 'llm_auth' })
+  it('IT-12 上游 401 映射成 llm_auth 且不污染项目', async () => {
+    fake.setMode('auth')
+    try {
+      const project = await createProject('触发 401')
+      const events = await readSse(await post(`/api/projects/${project.id}/generate`, { prompt: '触发 401' }))
+      expect(events.find((event) => event.type === 'error')).toMatchObject({ code: 'llm_auth' })
+      const detail = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail
+      expect(detail.project.files).toHaveLength(0)
+      expect(detail.project.version).toBe(0)
+      expect(detail.messages.some((message) => message.kind === 'error')).toBe(true)
+    } finally {
+      fake.setMode('ok')
+    }
+  })
 
-    const detail = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail
-    expect(detail.project.files).toHaveLength(0)
-    expect(detail.project.version).toBe(0)
-    expect(detail.messages.some((message) => message.kind === 'error')).toBe(true)
-    mode = 'ok'
+  it('第一家不可用时自动换下一家，并留下可见的提示', async () => {
+    const bad = await startFakeUpstream()
+    bad.setMode('auth')
+    try {
+      await withServer(
+        catalogOf([
+          { profile: profile({ id: 'bad', label: '坏掉的一家', baseUrl: bad.url }), apiKey: 'k' },
+          { profile: profile({ id: 'good', label: '好的那家', baseUrl: fake.url }), apiKey: 'k' },
+        ]),
+        async (url) => {
+          const id = await newProjectOn(url, '故障转移')
+          const response = await fetch(`${url}/api/projects/${id}/generate`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ prompt: '故障转移' }),
+          })
+          const events = await readSse(response)
+          const notices = events.filter((event) => event.type === 'notice')
+          expect(notices.length).toBeGreaterThan(0)
+          expect(events.some((event) => event.type === 'error')).toBe(false)
+          const done = events.find((event) => event.type === 'done')
+          expect(done).toMatchObject({ provider: { id: 'good' } })
+          const detail = (await (await fetch(`${url}/api/projects/${id}`)).json()) as ProjectDetail
+          expect(detail.project.provider).toBe('good')
+          // 坏的那家确实被打过一次，不是根本没尝试
+          expect(bad.calls()).toBe(1)
+        },
+      )
+    } finally {
+      await bad.close()
+    }
+  })
+
+  it('模型引用了 app.js 却没输出 → 自动修一轮，产物完整且方案不被覆盖', async () => {
+    let pass = 0
+    const flaky = await startFakeUpstream((prompt) => {
+      pass++
+      return pass === 1 ? nwfMissingJs(prompt) : nwfJsOnly()
+    })
+    try {
+      await withServer(catalogOf([{ profile: profile({ id: 'flaky', baseUrl: flaky.url }), apiKey: 'k' }]), async (url) => {
+        const id = await newProjectOn(url, '做一个记账应用，叫「补全账本」')
+        const response = await fetch(`${url}/api/projects/${id}/generate`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ prompt: '做一个记账应用，叫「补全账本」' }),
+        })
+        const events = await readSse(response)
+
+        expect(events.some((event) => event.type === 'notice' && /正在修第 1 轮/.test(String((event as { message?: string }).message)))).toBe(true)
+        expect(events.some((event) => event.type === 'error')).toBe(false)
+        expect(flaky.calls()).toBe(2)
+
+        const detail = (await (await fetch(`${url}/api/projects/${id}`)).json()) as ProjectDetail
+        const paths = detail.project.files.map((file) => file.path)
+        expect(paths).toContain('app.js')
+        expect(paths).toContain('index.html')
+        // 引用完整性必须真的变绿，而不是"修了但还是缺"
+        expect(detail.project.checks.find((check) => check.id === 'refs')?.ok).toBe(true)
+        // 修复轮不能把方案卡覆盖成占位方案（应用名是最容易露馅的字段）
+        expect(detail.project.name).toBe('补全账本')
+        // 两次请求的用量要合并上报，否则界面上的耗时/token 比真实值小
+        const done = events.find((event) => event.type === 'done')
+        expect(done?.type === 'done' && done.usage.chars).toBeGreaterThan(0)
+        expect(detail.messages.filter((message) => message.role === 'user')).toHaveLength(1)
+      })
+    } finally {
+      await flaky.close()
+    }
+  })
+
+  it('生成的 JS 语法不通会被查出来，并触发修复轮', async () => {
+    let pass = 0
+    const broken = await startFakeUpstream((prompt) => {
+      pass++
+      // 第一轮：字符串没闭合 —— 结构检查全绿，但应用一打开就白屏
+      if (pass === 1) return nwfFor(prompt).replace('rows.push({ at: Date.now() });', "rows.push('未闭合的字符串);")
+      return nwfJsOnly()
+    })
+    try {
+      await withServer(catalogOf([{ profile: profile({ id: 'brokentest', baseUrl: broken.url }), apiKey: 'k' }]), async (url) => {
+        const id = await newProjectOn(url, '做一个记账应用，叫「坏脚本」')
+        const events = await readSse(
+          await fetch(`${url}/api/projects/${id}/generate`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ prompt: '做一个记账应用，叫「坏脚本」' }),
+          }),
+        )
+        expect(broken.calls()).toBe(2)
+        expect(events.some((event) => event.type === 'notice' && /正在修第 1 轮/.test(String((event as { message?: string }).message)))).toBe(true)
+        const detail = (await (await fetch(`${url}/api/projects/${id}`)).json()) as ProjectDetail
+        const syntax = detail.project.checks.filter((check) => check.id.startsWith('syntax:'))
+        expect(syntax.length).toBeGreaterThan(0)
+        expect(syntax.every((check) => check.ok)).toBe(true)
+      })
+    } finally {
+      await broken.close()
+    }
+  })
+
+  it('修不好时不会无限重试，也不会把整次生成判成失败', async () => {
+    const stubborn = await startFakeUpstream((prompt) => nwfMissingJs(prompt))
+    try {
+      await withServer(catalogOf([{ profile: profile({ id: 'stubborn', baseUrl: stubborn.url }), apiKey: 'k' }]), async (url) => {
+        const id = await newProjectOn(url, '做一个记账应用，叫「补不上账本」')
+        const events = await readSse(
+          await fetch(`${url}/api/projects/${id}/generate`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ prompt: '做一个记账应用，叫「补不上账本」' }),
+          }),
+        )
+        // 1 次原始生成 + MAX_REPAIR_PASSES(2) 次修复，到此为止
+        expect(stubborn.calls()).toBe(3)
+        expect(events.some((event) => event.type === 'error')).toBe(false)
+        expect(events.some((event) => event.type === 'notice' && event.level === 'warn')).toBe(true)
+        const detail = (await (await fetch(`${url}/api/projects/${id}`)).json()) as ProjectDetail
+        expect(detail.project.files.map((file) => file.path)).toContain('index.html')
+        expect(detail.project.version).toBe(1)
+      })
+    } finally {
+      await stubborn.close()
+    }
+  })
+
+  it('免 Key 通道超配额时排队而不是打死', async () => {
+    resetGates()
+    const catalog = catalogOf([
+      { profile: profile({ id: 'gated', label: '限流的一家', minIntervalMs: 1500, free: true }), apiKey: '' },
+    ])
+    await withServer(catalog, async (url) => {
+      const first = await newProjectOn(url, '排队一')
+      const second = await newProjectOn(url, '排队二')
+      const call = (id: string, prompt: string) =>
+        fetch(`${url}/api/projects/${id}/generate`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        }).then(readSse)
+      const started = Date.now()
+      const [a, b] = await Promise.all([call(first, '排队一'), call(second, '排队二')])
+      const elapsed = Date.now() - started
+      expect(a.some((event) => event.type === 'done')).toBe(true)
+      expect(b.some((event) => event.type === 'done')).toBe(true)
+      // 两个都成功，但第二个必须被闸门推后 —— 串行化而不是并发撞上 429
+      expect(elapsed).toBeGreaterThanOrEqual(1400)
+      expect(b.some((event) => event.type === 'notice' && event.level === 'info')).toBe(true)
+    })
+    resetGates()
   })
 })
 
@@ -366,66 +584,71 @@ describe('HTTP · 我的项目与中断保留', () => {
   })
 
   it('IT-17 停止生成后保留已完成的文件并落一个新版本', async () => {
-    const prompt = '做一个待办清单，可以勾选完成'
-    const project = await createProject(prompt)
+    fake.setMode('slow')
+    try {
+      const prompt = '做一个待办清单，可以勾选完成'
+      const project = await createProject(prompt)
 
-    const response = await fetch(base + `/api/projects/${project.id}/generate`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt, engine: 'local' }),
-    })
-    expect(response.status).toBe(200)
+      const response = await fetch(base + `/api/projects/${project.id}/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      })
+      expect(response.status).toBe(200)
 
-    const events: AgentEvent[] = []
-    const reader = response.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    const reading = (async () => {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let index: number
-        while ((index = buffer.indexOf('\n\n')) >= 0) {
-          const block = buffer.slice(0, index)
-          buffer = buffer.slice(index + 2)
-          for (const line of block.split('\n')) {
-            const trimmed = line.trim()
-            if (!trimmed.startsWith('data:')) continue
-            try {
-              events.push(JSON.parse(trimmed.slice(5).trim()) as AgentEvent)
-            } catch {
-              /* 忽略坏帧 */
+      const events: AgentEvent[] = []
+      const reader = response.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      const reading = (async () => {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          let index: number
+          while ((index = buffer.indexOf('\n\n')) >= 0) {
+            const block = buffer.slice(0, index)
+            buffer = buffer.slice(index + 2)
+            for (const line of block.split('\n')) {
+              const trimmed = line.trim()
+              if (!trimmed.startsWith('data:')) continue
+              try {
+                events.push(JSON.parse(trimmed.slice(5).trim()) as AgentEvent)
+              } catch {
+                /* 忽略坏帧 */
+              }
             }
           }
         }
+      })()
+
+      // 等第一个文件真正写完（收到 file_end），再喊停
+      const deadline = Date.now() + 20_000
+      while (!events.some((event) => event.type === 'file_end') && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 15))
       }
-    })()
+      expect(events.some((event) => event.type === 'file_end')).toBe(true)
 
-    // 等第一个文件真正写完（收到 file_end），再喊停
-    const deadline = Date.now() + 15_000
-    while (!events.some((event) => event.type === 'file_end') && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 15))
+      const stopped = await post(`/api/projects/${project.id}/stop`, {})
+      expect(stopped.status).toBe(200)
+
+      await reading
+
+      const done = events.find((event) => event.type === 'done')
+      expect(done).toBeTruthy()
+      expect(done?.type === 'done' && done.partial).toBe(true)
+
+      const detail = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail
+      expect(detail.project.files.length).toBeGreaterThan(0)
+      expect(detail.project.version).toBe(1)
+      // 保留下来的一定是完整闭合的文件，不能是写了一半的
+      for (const file of detail.project.files) {
+        expect(file.content.trim().length).toBeGreaterThan(0)
+      }
+      expect(detail.messages.some((message) => message.content.includes('已停止'))).toBe(true)
+    } finally {
+      fake.setMode('ok')
     }
-    expect(events.some((event) => event.type === 'file_end')).toBe(true)
-
-    const stopped = await post(`/api/projects/${project.id}/stop`, {})
-    expect(stopped.status).toBe(200)
-
-    await reading
-
-    const done = events.find((event) => event.type === 'done')
-    expect(done).toBeTruthy()
-    expect(done?.type === 'done' && done.partial).toBe(true)
-
-    const detail = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail
-    expect(detail.project.files.length).toBeGreaterThan(0)
-    expect(detail.project.version).toBe(1)
-    // 保留下来的一定是完整闭合的文件，不能是写了一半的
-    for (const file of detail.project.files) {
-      expect(file.content.trim().length).toBeGreaterThan(0)
-    }
-    expect(detail.messages.some((message) => message.content.includes('已停止'))).toBe(true)
   })
 
   it('IT-18 没有进行中的生成时停止接口给出明确错误', async () => {
@@ -436,11 +659,8 @@ describe('HTTP · 我的项目与中断保留', () => {
 })
 
 describe('HTTP · 设计微调', () => {
-  async function generate(projectId: string) {
-    const response = await post(`/api/projects/${projectId}/generate`, {
-      prompt: '做一个记账应用，叫「微调账本」',
-      engine: 'local',
-    })
+  async function generate(projectId: string, prompt = '做一个记账应用，叫「微调账本」') {
+    const response = await post(`/api/projects/${projectId}/generate`, { prompt })
     expect(response.status).toBe(200)
     const events = await readSse(response)
     expect(events.some((event) => event.type === 'done')).toBe(true)
@@ -482,7 +702,7 @@ describe('HTTP · 设计微调', () => {
 
   it('IT-20 显式传 null 可以清除微调，恢复生成时的外观', async () => {
     const project = await createProject('做一个待办应用，叫「微调待办」')
-    await generate(project.id)
+    await generate(project.id, '做一个待办应用，叫「微调待办」，主色用墨绿')
 
     await fetch(`${base}/api/projects/${project.id}`, {
       method: 'PATCH',
@@ -498,6 +718,8 @@ describe('HTTP · 设计微调', () => {
     const body = (await cleared.json()) as { project: { tweak?: unknown }; previewHtml: string }
     expect(body.project.tweak).toBeUndefined()
     expect(body.previewHtml).not.toContain('data-nucleus="tweak"')
+    // 回到的是"这个项目生成时的主色"，不是某个写死的默认绿
+    expect(body.previewHtml).toContain('#12715B')
   })
 
   it('IT-21 非法字段被局部丢弃（不会 400，也不会写脏数据）', async () => {
@@ -608,7 +830,11 @@ describe('HTTP · 接口面语义', () => {
     // 这里另起一个带真实产物目录的实例，专测 HEAD 语义。
     const clientDir = await fs.mkdtemp(join(tmpdir(), 'nucleus-client-'))
     await fs.writeFile(join(clientDir, 'index.html'), '<!doctype html><html><head></head><body>ok</body></html>', 'utf8')
-    const second = await createNucleusServer({ dataDir: await fs.mkdtemp(join(tmpdir(), 'nucleus-head-')), clientDir })
+    const second = await createNucleusServer({
+      dataDir: await fs.mkdtemp(join(tmpdir(), 'nucleus-head-')),
+      clientDir,
+      catalog: catalogOf([{ profile: profile(), apiKey: 'sk-fake' }]),
+    })
     await new Promise<void>((resolve) => second.server.listen(0, '127.0.0.1', resolve))
     const address = second.server.address()
     const port = typeof address === 'object' && address ? address.port : 0

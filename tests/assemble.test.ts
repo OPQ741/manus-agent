@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { assemble, bridgeScript, withSeed } from '../server/preview/assemble'
-import { composeFiles } from '../server/agent/composer'
+import { loadFactory } from '../server/store/seed'
 import type { FileEntry } from '../shared/types'
-import { DESIGN } from './helpers'
 
 const at = Date.now()
 const file = (path: string, content: string): FileEntry => ({ path, content, updatedAt: at })
@@ -121,11 +120,46 @@ describe('assemble · 桥接与检查', () => {
     expect(result.html).toContain('const html = "<\\/script>')
   })
 
-  it('真实产物组装后无阻断问题', () => {
-    const files = composeFiles('做一个记账应用', DESIGN)
+  it('真实模型产物（出厂示例）组装后无阻断问题', () => {
+    const example = loadFactory()
+    if (example.files.length === 0) throw new Error('factory-example.json 是空的：跑 scripts/make-factory.mjs 生成')
+    const files = example.files.map((item) => file(item.path, item.content))
     const result = assemble(files)
     expect(result.checks.filter((check) => check.level === 'block' && !check.ok)).toEqual([])
     expect(result.html).toContain('data-nucleus="bridge"')
+    // 出厂示例必须本身是完整的：缺引用或语法不通就不该被固化成"示例"
+    expect(result.missing).toEqual([])
+    expect(result.broken).toEqual([])
+    // 示例还得真的支持"实时改主色"：模型如果散写色值、不声明 --accent，
+    // 微调面板就会变成一个骗人的开关（这条只能对着真实产物验，提示词约束不算数）
+    expect(result.checks.find((check) => check.id === 'theme_vars')?.ok).toBe(true)
+  })
+
+  it('脚本语法不通是阻断级：结构全绿但一打开就白屏的情况必须被拦住', () => {
+    const broken = file('app.js', "const a = '未闭合的字符串);")
+    const result = assemble([file('index.html', HTML), file('app.js', broken.content), file('styles.css', '')])
+    const check = result.checks.find((item) => item.id === 'syntax:app.js')
+    expect(check?.ok).toBe(false)
+    expect(check?.level).toBe('block')
+    expect(result.broken).toEqual(['app.js'])
+  })
+
+  it('语法检查只编译不执行', () => {
+    // 这行如果真被执行就会抛错；new Function 只编译，所以应当判为"语法 OK"
+    const ok = assemble([file('index.html', HTML), file('app.js', 'throw new Error("boom")'), file('styles.css', '')])
+    expect(ok.broken).toEqual([])
+    expect(ok.checks.find((check) => check.id === 'syntax:app.js')?.ok).toBe(true)
+  })
+
+  it('只有 --radius 没有 --accent 时，如实说"主色需要重新生成"', () => {
+    const result = assemble([
+      file('index.html', HTML),
+      file('styles.css', ':root { --radius: 12px; }'),
+      file('app.js', 'var x = 1'),
+    ])
+    const tokens = result.checks.find((check) => check.id === 'theme_vars')
+    expect(tokens?.ok).toBe(false)
+    expect(tokens?.detail).toContain('主色需要重新生成')
   })
 })
 

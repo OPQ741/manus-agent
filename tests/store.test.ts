@@ -45,7 +45,7 @@ describe('store · 项目', () => {
       plan: null,
       checks: [],
       prompt: 'A',
-      usage: { ms: 1, engine: 'local', chars: 10 },
+      usage: { ms: 1, provider: 'test', chars: 10 },
     })
     expect(store.listVersions(project.id)).toHaveLength(1)
     await store.deleteProject(project.id)
@@ -57,7 +57,7 @@ describe('store · 项目', () => {
 
 describe('store · 版本', () => {
   const commit = (id: string, files: FileEntry[], prompt = 'p') =>
-    store.commit(id, { files, plan: null, checks: [], prompt, usage: { ms: 1, engine: 'local', chars: 10 } })
+    store.commit(id, { files, plan: null, checks: [], prompt, usage: { ms: 1, provider: 'test', chars: 10 } })
 
   it('UT-STORE-03 版本号递增且 changed 只含真正变化的文件', async () => {
     const project = await store.createProject({ prompt: 'A' })
@@ -142,7 +142,7 @@ describe('store · 持久化', () => {
     const publicSettings = store.publicSettings()
     expect(publicSettings.hasKey).toBe(true)
     expect(publicSettings.apiKeyMasked).toBe('sk-****abcd')
-    expect(publicSettings.cloudReady).toBe(true)
+    expect(publicSettings.provider).toBe('')
     expect(JSON.stringify(publicSettings)).not.toContain('1234567890')
   })
 })

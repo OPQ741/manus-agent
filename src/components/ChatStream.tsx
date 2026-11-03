@@ -17,6 +17,8 @@ export interface LiveState {
   checks: Check[]
   warnings: string[]
   note: string
+  /** 服务端的过程性提示：排队等免 Key 配额、换了一家模型重试… */
+  notice: { level: 'info' | 'warn'; text: string } | null
 }
 
 export const EMPTY_LIVE: LiveState = {
@@ -27,6 +29,7 @@ export const EMPTY_LIVE: LiveState = {
   checks: [],
   warnings: [],
   note: '',
+  notice: null,
 }
 
 function readPlan(meta: Record<string, unknown> | undefined): Plan | null {
@@ -92,6 +95,11 @@ function LiveBlock({ live }: { live: LiveState }) {
             </div>
           ))}
         </div>
+      ) : null}
+      {live.notice ? (
+        <p className={`run-notice ${live.notice.level}`} role="status">
+          {live.notice.text}
+        </p>
       ) : null}
       {live.note ? <p className="muted" style={{ margin: 0, fontSize: 12 }}>{live.note}</p> : null}
       {live.checks.length > 0 ? (

@@ -37,7 +37,7 @@ export function lighten(hex: string, ratio: number): string {
   return `#${toHex(mix(r))}${toHex(mix(g))}${toHex(mix(b))}`
 }
 
-/** 主色上的文字色：亮底用深字，暗底用白字。阈值与本地引擎一致，避免两种观感。 */
+/** 主色上的文字色：亮底用深字，暗底用白字。前后端共用这一份阈值，避免两种观感。 */
 export function contrastInk(hex: string): string {
   const [r, g, b] = channels(hex)
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255

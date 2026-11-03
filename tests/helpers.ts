@@ -11,6 +11,7 @@ export const DESIGN: DesignPrefs = { accent: '#4B3BFF', theme: 'light', locale: 
  */
 export type Projected =
   | { kind: 'note'; text: string }
+  | { kind: 'notice'; level: 'info' | 'warn'; text: string }
   | { kind: 'plan'; name: string; files: string[] }
   | { kind: 'file'; path: string; content: string }
   | { kind: 'delete'; path: string }
@@ -31,6 +32,10 @@ export function project(events: AgentEvent[]): Projected[] {
     switch (event.type) {
       case 'note':
         noteBuffer += event.text
+        break
+      case 'notice':
+        flushNote()
+        out.push({ kind: 'notice', level: event.level, text: event.message })
         break
       case 'plan':
         flushNote()

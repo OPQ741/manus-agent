@@ -60,7 +60,7 @@ export function SharePage({ slug }: { slug: string }) {
           <div className="muted" style={{ fontSize: 11.5 }}>
             {data
               ? `v${data.project.version} · ${data.project.fileCount} 个文件 · ${
-                  data.project.engine === 'local' ? '本地引擎' : '云模型'
+                  data.project.providerLabel || '模型生成'
                 } · 作者 ${authorLabel(data.project.createdBy)}`
               : ''}
           </div>

@@ -9,9 +9,9 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "dev:api": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist/server.js --packages=external --watch",
+    "dev:api": "esbuild server/main.ts --bundle --platform=node --format=esm --outfile=dist/server.js --packages=external --watch",
     "build:client": "vite build",
-    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist/server.js --packages=external --log-level=warning",
+    "build:server": "esbuild server/main.ts --bundle --platform=node --format=esm --outfile=dist/server.js --packages=external --log-level=warning",
     "build": "npm run typecheck && npm run build:client && npm run build:server",
     "prestart": "npm run build",
     "start": "node dist/server.js",
@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "make:factory": "esbuild scripts/make-factory.ts --bundle --platform=node --format=esm --outfile=.tmp-factory/run.mjs --log-level=warning && node .tmp-factory/run.mjs",
     "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {

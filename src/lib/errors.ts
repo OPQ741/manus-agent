@@ -38,12 +38,12 @@ const RULES: Record<string, Rule> = {
   },
   llm_quota: {
     title: '额度或速率限制',
-    hint: '账户余额不足，或触发了上游的并发/速率限制。等一会儿或换个模型再试。',
+    hint: '这一家的配额到了（免 Key 通道约 30 秒 1 次）。稍等一下重试，或在设置里换成你自己的 Key。',
     action: { kind: 'retry', label: '重新生成' },
   },
   llm_timeout: {
     title: '模型响应超时',
-    hint: '30 秒没有收到首字节，或传输中途断开了。可以重试，或改用本地引擎。',
+    hint: '30 秒没有收到首字节，或传输中途断开了。重试一次；反复超时的话，换一家模型。',
     action: { kind: 'retry', label: '重新生成' },
   },
   llm_network: {
@@ -53,12 +53,12 @@ const RULES: Record<string, Rule> = {
   },
   protocol_error: {
     title: '模型没有按协议输出',
-    hint: '模型返回的内容里没找到可用的文件。换个说法重试，或者切到本地引擎。',
+    hint: '这家模型没遵守输出协议（可能是太小或太爱解释）。换个说法重试，或在设置里换一家。',
     action: { kind: 'retry', label: '重新生成' },
   },
-  engine_unconfigured: {
-    title: '云模型还没配置',
-    hint: '需要模型地址、模型名和 API Key 三样。填好后就能用更强的引擎。',
+  provider_unavailable: {
+    title: '没有可用的模型通道',
+    hint: '服务端把免 Key 通道关掉了，也没有填自己的 Key。到设置里选一个已就绪的预设，或填上你的 Key。',
     action: { kind: 'settings', label: '去设置' },
   },
   busy: {

@@ -52,6 +52,15 @@ export const SYSTEM_PROMPT = `你是 Nucleus 的应用生成引擎，一名擅�
 4. 用户只是在改东西时，只输出发生变化的文件，其余文件不要重复输出；要删文件用 <delete path="xxx"/>。
 5. 标签必须闭合。文件内容里如果出现 </file> 字样，请改成 <\\/file>。
 
+# 设计令牌契约（决定"实时微调"能不能用，必须遵守）
+- 主色必须写成 CSS 变量 --accent，圆角必须写成 --radius，都定义在 :root 上：
+  :root { --accent: #4B3BFF; --radius: 14px; }
+- 所有用到主色/圆角的地方一律用 var(--accent) / var(--radius)，不要在多处重复写死同一个色值。
+- 原因：平台可以在不重新生成代码的前提下实时改这两个变量；你把颜色散写在各个规则里，
+  用户的"换个主色"就只会改到一半。
+- 同时派生 --accent-soft（主色的浅底，用于 focus 光环与选中态）与 --accent-ink（主色上的文字色，
+  深底用 #FFFFFF、亮底用 #14140F）。
+
 # 工程质量底线
 - 真实交互：按钮点了要有反应，表单要能提交，状态要真的变化；数据用 localStorage 持久化（键名前缀 nucleus:）。
 - 真实内容：中文界面用中文文案，示例数据要像真的（不要 foo/bar/123）。
@@ -71,6 +80,48 @@ export function firstTurnMessages(prompt: string, design: DesignPrefs): ChatMess
 需求：${sanitizeUserPrompt(prompt)}
 
 请从零生成这个应用。`,
+    },
+  ]
+}
+
+/**
+ * 修复轮：模型有时会"引用了 app.js 却不输出它"、"写到一半字符串没闭合"，
+ * 或者干脆把文件截断在中间（小模型 + 输出预算下很常见）。
+ *
+ * 与其让用户拿到一个"打开就白屏"的应用，不如再问一次，但只补缺的那几个文件：
+ *  - 提示词里带上**上一次的失败原因**，模型才知道要重写的到底是哪一段；
+ *  - 明确禁止重写已有文件，否则它会把已经做好的部分换个写法覆盖掉，
+ *    用户看到的版本历史就变成了一次毫无意义的全文替换。
+ */
+export function repairMessages(
+  prompt: string,
+  design: DesignPrefs,
+  files: FileEntry[],
+  repair: { path: string; reason: string }[],
+  plan: Plan | null,
+): ChatMessage[] {
+  const context = renderFiles(files, prompt)
+  const list = repair.map((item) => `- ${item.path}：${item.reason}`).join('\n')
+  return [
+    { role: 'system', content: SYSTEM_PROMPT },
+    {
+      role: 'user',
+      content: `${designBrief(design)}
+
+原始需求：${sanitizeUserPrompt(prompt)}
+${plan ? `应用：${plan.name}（${plan.summary}）` : ''}
+
+已经生成的文件：
+${context}
+
+问题：下面这些文件必须重新输出，每一个都要**完整、能直接运行**：
+${list}
+
+要求：
+1. 只输出上面列出的文件，每个都用 <file path="..."> 包裹，不要重复输出其他文件。
+2. 与已有文件的 DOM id / class / 全局变量严格对应，不要自己另起一套。
+3. 文件要写到闭合标签为止，不要停在半句；单个文件控制在 400 行以内，宁可精简功能也不要截断。
+4. 不要解释，不要代码围栏。`,
     },
   ]
 }

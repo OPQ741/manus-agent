@@ -19,6 +19,24 @@ export interface AssembleResult {
   checks: Check[]
   inlined: string[]
   missing: string[]
+  /** 语法就不通的脚本文件：驱动修复轮（见 index.ts），也是"看起来生成了、其实一打开就报错"的唯一拦截点 */
+  broken: string[]
+}
+
+/**
+ * 语法体检：编译但不执行。
+ *
+ * 为什么必须查：模型（尤其小模型 + 输出预算紧时）会把一个字符串写到一半就停，
+ * 结构检查全绿、预览却是一片空白 —— 这类"静默坏掉"比任何报错都伤信任。
+ * `new Function` 只编译不运行，所以既能抓到语法错误，又不会执行生成物的代码。
+ */
+export function scriptSyntax(code: string): string | null {
+  try {
+    new Function(code)
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
 }
 
 const LOCAL_URL = /^(?!https?:|data:|mailto:|tel:|#|\/\/)/i
@@ -183,6 +201,7 @@ export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResul
   const entryFile = pickEntry(files)
   const inlined: string[] = []
   const missing: string[] = []
+  const broken: string[] = []
   const checks: Check[] = []
 
   if (!entryFile) {
@@ -193,7 +212,7 @@ export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResul
       level: 'block',
       detail: '没有任何 .html 文件，无法生成预览',
     })
-    return { html: '', entry: null, checks, inlined, missing }
+    return { html: '', entry: null, checks, inlined, missing, broken }
   }
 
   checks.push({ id: 'entry', label: '入口文件存在', ok: true, level: 'block', detail: entryFile.path })
@@ -256,12 +275,36 @@ export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResul
   checks.push({
     id: 'theme_vars',
     label: '可用设计令牌',
-    ok: tokenized,
+    // 主色微调靠 --accent：只有 --radius 时提示"可能不生效"是诚实的，
+    // 但真正决定成败的是脚本能不能跑起来，所以语法错误单独提到 block 级。
+    ok: /--accent\s*:/.test(html),
     level: 'info',
-    detail: tokenized ? '声明了 --accent / --radius，支持实时微调' : '未声明设计令牌，实时微调可能不生效',
+    detail: /--accent\s*:/.test(html)
+      ? '声明了 --accent，支持实时改主色'
+      : tokenized
+        ? '只有 --radius：圆角可实时微调，主色需要重新生成'
+        : '未声明设计令牌，实时微调可能不生效',
   })
 
-  return { html, entry: entryFile.path, checks, inlined, missing }
+  // 语法体检：一个写到一半的字符串会让整个应用静默白屏，结构检查是看不出来的
+  for (const file of files.values()) {
+    if (!/\.js$/i.test(file.path)) continue
+    const problem = scriptSyntax(file.content)
+    if (problem) {
+      broken.push(file.path)
+      checks.push({
+        id: `syntax:${file.path}`,
+        label: `${file.path} 语法`,
+        ok: false,
+        level: 'block',
+        detail: problem.slice(0, 160),
+      })
+    } else {
+      checks.push({ id: `syntax:${file.path}`, label: `${file.path} 语法`, ok: true, level: 'block' })
+    }
+  }
+
+  return { html, entry: entryFile.path, checks, inlined, missing, broken }
 }
 
 /** 供分享页 / 导出使用：往组装结果里塞入持久化种子。 */

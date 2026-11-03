@@ -3,10 +3,10 @@ import type {
   ApiErrorCode,
   DesignPrefs,
   DesignTweak,
-  EngineId,
   Project,
   ProjectDetail,
   ProjectSummary,
+  ProviderId,
   PublicSettings,
   ShareDetail,
   Version,
@@ -81,7 +81,7 @@ export const api = {
   },
   /** 让服务端中断当前生成；连接不关，中断后服务端会提交已完成的文件。 */
   stop: (id: string) => request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
-  createProject: (input: { prompt?: string; engine?: EngineId; design?: DesignPrefs }) =>
+  createProject: (input: { prompt?: string; provider?: ProviderId; design?: DesignPrefs }) =>
     request<{ project: Project }>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
   getProject: (id: string) =>
     request<ProjectDetail & { previewHtml: string }>(`/api/projects/${encodeURIComponent(id)}`),
@@ -111,19 +111,20 @@ export const api = {
     }),
   getSettings: () => request<PublicSettings>('/api/settings'),
   saveSettings: (input: {
-    engine?: EngineId
+    provider?: string
     baseUrl?: string
     model?: string
     apiKey?: string
     design?: Partial<DesignPrefs>
   }) => request<PublicSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(input) }),
   testConnection: () =>
-    request<{ ok: boolean; ms: number; sample: string; model: string }>('/api/settings/test', {
+    request<{ ok: boolean; ms: number; sample: string; model: string; provider: string }>('/api/settings/test', {
       method: 'POST',
     }),
   share: (slug: string) => request<ShareDetail>(`/api/share/${encodeURIComponent(slug)}`),
   exportUrl: (id: string) => `/api/projects/${encodeURIComponent(id)}/export`,
-  health: () => request<{ ok: boolean; engine: EngineId; version: string }>('/api/health'),
+  health: () =>
+    request<{ ok: boolean; provider: string | null; providers: string[]; version: string }>('/api/health'),
 }
 
 /**
@@ -133,14 +134,14 @@ export const api = {
 export async function generate(
   projectId: string,
   prompt: string,
-  engine: EngineId | undefined,
+  provider: ProviderId | undefined,
   onEvent: (event: AgentEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/generate`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-visitor': visitorId() },
-    body: JSON.stringify({ prompt, engine }),
+    body: JSON.stringify({ prompt, provider }),
     signal,
   })
 

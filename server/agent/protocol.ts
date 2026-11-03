@@ -425,7 +425,7 @@ export class ProtocolParser {
   }
 }
 
-/** 便捷函数：一次性解析整段文本（测试与本地引擎使用）。 */
+/** 便捷函数：一次性解析整段文本（测试与出厂示例校验使用）。 */
 export function parseProtocol(text: string, options: ParserOptions = {}): AgentEvent[] {
   const parser = new ProtocolParser(options)
   const events = parser.push(text)

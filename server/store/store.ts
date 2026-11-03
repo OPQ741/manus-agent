@@ -11,20 +11,24 @@ import { dirname, join } from 'node:path'
 import type {
   Check,
   DesignPrefs,
-  EngineId,
   FileEntry,
   Message,
   Plan,
   Project,
   ProjectDetail,
   ProjectSummary,
+  ProviderId,
   PublicSettings,
   Usage,
   Version,
 } from '../../shared/types'
 
 export interface StoredSettings {
-  engine: EngineId
+  /**
+   * 访客点名的提供方：'' = 交给服务端解析链（默认，免 Key 也能用）；
+   * 'custom' = 用下面的 baseUrl/model/apiKey 三项；其他 = 目录里的某个预设 id。
+   */
+  provider: string
   baseUrl: string
   model: string
   apiKey: string
@@ -32,11 +36,26 @@ export interface StoredSettings {
 }
 
 export interface Database {
-  schema: 1
+  /**
+   * v2：engine 'local'|'cloud' 被 provider id 取代（本地 mock 编译器已删除）。
+   * 读到旧 schema 时备份并重建，顺带清掉上一版预置的 mock 项目。
+   */
+  schema: 2
   projects: Project[]
   messages: Message[]
   versions: Version[]
   settings: StoredSettings
+}
+
+export const SCHEMA_VERSION = 2
+
+/** 旧版本数据库：走"备份 + 重建"，而不是硬迁移一堆过期 mock 项目。 */
+class SchemaMismatchError extends Error {
+  readonly schema: number
+  constructor(schema: number) {
+    super(`schema ${schema} ≠ ${SCHEMA_VERSION}`)
+    this.schema = schema
+  }
 }
 
 export const DEFAULT_DESIGN: DesignPrefs = { accent: '#4B3BFF', theme: 'light', locale: 'zh' }
@@ -58,11 +77,11 @@ export const newVersionId = () => `v_${randomToken(9)}`
 
 export function emptyDatabase(): Database {
   return {
-    schema: 1,
+    schema: SCHEMA_VERSION,
     projects: [],
     messages: [],
     versions: [],
-    settings: { engine: 'local', baseUrl: '', model: '', apiKey: '', design: { ...DEFAULT_DESIGN } },
+    settings: { provider: '', baseUrl: '', model: '', apiKey: '', design: { ...DEFAULT_DESIGN } },
   }
 }
 
@@ -74,7 +93,8 @@ export function summarize(project: Project): ProjectSummary {
     summary: project.summary,
     version: project.version,
     fileCount: project.files.length,
-    engine: project.engine,
+    provider: project.provider,
+    providerLabel: project.providerLabel,
     createdBy: project.createdBy,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
@@ -94,6 +114,8 @@ export interface CommitInput {
   prompt: string
   usage: Usage
   label?: string
+  /** 这次实际用了哪家模型；回滚等场景可以不传（保持原值） */
+  provider?: { id: ProviderId; label: string }
 }
 
 export class Store {
@@ -110,14 +132,29 @@ export class Store {
     try {
       const raw = await fs.readFile(file, 'utf8')
       const parsed = JSON.parse(raw) as Database
-      if (!parsed || parsed.schema !== 1 || !Array.isArray(parsed.projects)) {
-        throw new Error('数据库 schema 不匹配')
+      if (!parsed || !Array.isArray(parsed.projects)) {
+        throw new Error('数据库结构不可识别')
+      }
+      if (parsed.schema !== SCHEMA_VERSION) {
+        // 旧 schema（v1 有本地引擎预置的 mock 项目）：备份后重建，
+        // 让 seed 用出厂真实示例重新填一次，而不是把过期数据带进新契约。
+        throw new SchemaMismatchError(parsed.schema)
       }
       parsed.messages ??= []
       parsed.versions ??= []
       parsed.settings ??= emptyDatabase().settings
       return new Store(file, parsed)
     } catch (error) {
+      if (error instanceof SchemaMismatchError) {
+        try {
+          await fs.rename(file, `${file}.v${error.schema}-backup.${Date.now()}`)
+        } catch {
+          /* 忽略备份失败：重建仍然继续 */
+        }
+        const store = new Store(file, emptyDatabase())
+        await store.save()
+        return store
+      }
       const code = (error as NodeJS.ErrnoException).code
       if (code !== 'ENOENT') {
         // 文件损坏：备份后重建，避免整个应用起不来
@@ -178,9 +215,10 @@ export class Store {
 
   async createProject(input: {
     prompt?: string
-    engine?: EngineId
     design?: DesignPrefs
     createdBy?: string
+    provider?: ProviderId
+    providerLabel?: string
   }): Promise<Project> {
     const now = Date.now()
     const project: Project = {
@@ -188,7 +226,8 @@ export class Store {
       slug: newSlug(),
       name: input.prompt ? deriveName(input.prompt) : '未命名应用',
       summary: input.prompt?.slice(0, 80) ?? '',
-      engine: input.engine ?? this.db.settings.engine,
+      provider: input.provider ?? '',
+      providerLabel: input.providerLabel ?? '',
       design: input.design ?? { ...this.db.settings.design },
       files: [],
       plan: null,
@@ -205,7 +244,7 @@ export class Store {
 
   async updateProject(
     id: string,
-    patch: Partial<Pick<Project, 'name' | 'summary' | 'design' | 'engine' | 'tweak'>>,
+    patch: Partial<Pick<Project, 'name' | 'summary' | 'design' | 'provider' | 'providerLabel' | 'tweak'>>,
   ): Promise<Project | null> {
     const project = this.getProject(id)
     if (!project) return null
@@ -277,6 +316,10 @@ export class Store {
     project.checks = input.checks
     project.version = Math.max(1, project.version + 1)
     project.updatedAt = Date.now()
+    if (input.provider) {
+      project.provider = input.provider.id
+      project.providerLabel = input.provider.label
+    }
     if (input.plan?.name) project.name = input.plan.name
     if (input.plan?.summary) project.summary = input.plan.summary
 
@@ -316,7 +359,7 @@ export class Store {
       plan: project.plan,
       checks: project.checks,
       prompt: `回滚至 v${seq}`,
-      usage: { ms: 0, engine: project.engine, chars: 0 },
+      usage: { ms: 0, provider: project.provider, chars: 0 },
       label: `回滚至 v${seq}`,
     })
   }
@@ -337,16 +380,21 @@ export class Store {
     return this.getSettings()
   }
 
-  publicSettings(): PublicSettings {
+  /**
+   * 对外可见的设置。
+   *
+   * 只含"访客自己填的那一份"：目录（providers）与实际生效的通道（active）由
+   * HTTP 层用 ProviderCatalog 补 —— 存储层不该知道模型目录这件事。
+   */
+  publicSettings(): Omit<PublicSettings, 'providers' | 'active'> {
     const settings = this.getSettings()
     return {
-      engine: settings.engine,
+      provider: settings.provider,
       baseUrl: settings.baseUrl,
       model: settings.model,
       hasKey: Boolean(settings.apiKey),
       apiKeyMasked: maskKey(settings.apiKey),
       design: settings.design,
-      cloudReady: Boolean(settings.baseUrl && settings.model && settings.apiKey),
       version: '1.0.0',
     }
   }

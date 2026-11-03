@@ -12,17 +12,45 @@ export interface LlmConfig {
   baseUrl: string
   apiKey: string
   model: string
+  /**
+   * 输出上限。必须由调用方显式给：
+   * 实测 Pollinations 匿名档默认只给 1500 completion tokens（含思考链），
+   * 不传这个字段时一个四文件应用会被从中间截断。
+   */
+  maxTokens?: number
+  temperature?: number
+  /**
+   * 推理强度（gpt-oss / R1 这类思考型模型）。
+   *
+   * 为什么重要：思考链和正文共用同一个输出预算，默认强度下模型常常"想完了但没写完"，
+   * 表现为文件写到一半被截断（实测 Pollinations 匿名档就这样）。
+   * 调低强度把 token 让给正文。不支持该参数的上游会忽略或报 400，所以它是可选的。
+   */
+  reasoningEffort?: 'high' | 'medium' | 'low'
+  /** 部分网关要求署名头（OpenRouter 的 http-referer / x-title） */
+  headers?: Record<string, string>
 }
 
+/** 错误分类：能不能换一家重试，由这一层判断，编排层不必认识 HTTP 状态码。 */
 export class LlmError extends Error {
   readonly code: ApiErrorCode
   readonly status?: number
+  /** true = 换个提供方或等一会儿再试有可能成功（限流、网络、上游 5xx）。 */
+  readonly retryable: boolean
+  /** 上游要求我们等待多久（秒），来自 Retry-After。 */
+  readonly retryAfterMs?: number
 
-  constructor(code: ApiErrorCode, message: string, status?: number) {
+  constructor(
+    code: ApiErrorCode,
+    message: string,
+    options: { status?: number; retryable?: boolean; retryAfterMs?: number } = {},
+  ) {
     super(message)
     this.name = 'LlmError'
     this.code = code
-    this.status = status
+    this.status = options.status
+    this.retryable = options.retryable ?? false
+    this.retryAfterMs = options.retryAfterMs
   }
 }
 
@@ -53,6 +81,17 @@ function mapStatus(status: number): ApiErrorCode {
   return 'llm_network'
 }
 
+/** Retry-After 支持「秒数」和「HTTP 日期」两种写法。 */
+function parseRetryAfter(res: Response): number | undefined {
+  const raw = res.headers.get('retry-after')
+  if (!raw) return undefined
+  const seconds = Number(raw)
+  if (Number.isFinite(seconds)) return Math.max(0, Math.min(seconds * 1000, 120_000))
+  const date = Date.parse(raw)
+  if (!Number.isFinite(date)) return undefined
+  return Math.max(0, Math.min(date - Date.now(), 120_000))
+}
+
 async function readError(res: Response): Promise<string> {
   try {
     const text = await res.text()
@@ -68,7 +107,7 @@ function withIdleTimeout<T>(promise: Promise<T>, ms: number, onTimeout: () => vo
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       onTimeout()
-      reject(new LlmError('llm_timeout', `模型响应超时（${Math.round(ms / 1000)}s 无数据）`))
+      reject(new LlmError('llm_timeout', `模型响应超时（${Math.round(ms / 1000)}s 无数据）`, { retryable: true }))
     }, ms)
   })
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)) as Promise<T>
@@ -112,13 +151,16 @@ export async function* streamChat(
           method: 'POST',
           headers: {
             'content-type': 'application/json',
-            authorization: `Bearer ${config.apiKey}`,
+            authorization: `Bearer ${config.apiKey || 'anonymous'}`,
+            ...config.headers,
           },
           body: JSON.stringify({
             model: config.model,
             messages,
             stream: true,
-            temperature: options.temperature ?? 0.6,
+            temperature: options.temperature ?? config.temperature ?? 0.6,
+            ...(config.maxTokens ? { max_tokens: config.maxTokens } : {}),
+            ...(config.reasoningEffort ? { reasoning_effort: config.reasoningEffort } : {}),
           }),
           signal: controller.signal,
         }),
@@ -128,14 +170,21 @@ export async function* streamChat(
     } catch (error) {
       if (error instanceof LlmError) throw error
       if ((error as Error).name === 'AbortError') {
-        throw new LlmError('llm_timeout', '请求被中止或超时')
+        throw new LlmError('llm_timeout', '请求被中止或超时', { retryable: !options.signal?.aborted })
       }
-      throw new LlmError('llm_network', '无法连接模型服务：' + ((error as Error).message ?? '网络错误'))
+      throw new LlmError('llm_network', '无法连接模型服务：' + ((error as Error).message ?? '网络错误'), {
+        retryable: true,
+      })
     }
 
     if (!res.ok || !res.body) {
       const detail = await readError(res)
-      throw new LlmError(mapStatus(res.status), `模型拒绝请求（${res.status}）：${detail}`, res.status)
+      throw new LlmError(mapStatus(res.status), `模型拒绝请求（${res.status}）：${detail}`, {
+        status: res.status,
+        // 401/403 换一家也没用（Key 问题）；429/402/5xx/网络类值得换一家或等一下
+        retryable: res.status !== 401 && res.status !== 403 && res.status !== 404,
+        retryAfterMs: res.status === 429 ? parseRetryAfter(res) : undefined,
+      })
     }
 
     const reader = res.body.getReader()
@@ -148,9 +197,9 @@ export async function* streamChat(
       try {
         chunk = await withIdleTimeout(reader.read(), idleTimeout, abort)
       } catch (error) {
-        if (error instanceof LlmError) throw new LlmError(error.code, '模型连接中断：' + error.message)
-        if (closed) throw new LlmError('llm_timeout', '模型连接中断')
-        throw new LlmError('llm_network', '读取模型输出失败')
+        if (error instanceof LlmError) throw new LlmError(error.code, '模型连接中断：' + error.message, { retryable: true })
+        if (closed) throw new LlmError('llm_timeout', '模型连接中断', { retryable: true })
+        throw new LlmError('llm_network', '读取模型输出失败', { retryable: true })
       }
       if (chunk.done) break
 
