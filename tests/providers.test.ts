@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { QueueFullError, projectedWait, resetGates, waitForSlot } from '../server/agent/queue'
-import { BUILTIN_PROVIDERS, buildCatalog, catalogView, isReady, resolveChain } from '../server/agent/providers'
+import { BUILTIN_PROVIDERS, buildCatalog, catalogView, createCatalogSource, isReady, resolveChain } from '../server/agent/providers'
 import { canFailover, createSink, placeholderPlan } from '../server/agent/runner'
 
 let dir: string
@@ -212,6 +212,76 @@ describe('providers · 解析链', () => {
     expect(isReady({ ...base, free: true }, '')).toBe(true)
     expect(isReady({ ...base, free: false }, '')).toBe(false)
     expect(isReady({ ...base, free: false }, 'k')).toBe(true)
+  })
+})
+
+describe('providers · 目录热加载与诊断', () => {
+  it('UT-PRV-18 配置文件坏成非法 JSON 时不静默：给出 warning，内置预设照常可用', async () => {
+    await fs.writeFile(configFile, '{ this is not json', 'utf8')
+    const catalog = await buildCatalog({ dataDir: dir, configFile, env: {} })
+    expect(catalog.entries.length).toBe(BUILTIN_PROVIDERS.length)
+    expect(catalog.warnings?.some((item) => item.includes('不是合法 JSON'))).toBe(true)
+  })
+
+  it('UT-PRV-19 新增条目缺 baseUrl/model 会被跳过，并点名是哪一条', async () => {
+    await writeConfig({ providers: [{ id: 'my-gateway', label: '自家网关', model: 'x' }] })
+    const catalog = await buildCatalog({ dataDir: dir, configFile, env: {} })
+    expect(catalog.entries.some((entry) => entry.profile.id === 'my-gateway')).toBe(false)
+    expect(catalog.warnings?.some((item) => item.includes('my-gateway') && item.includes('baseUrl'))).toBe(true)
+  })
+
+  it('UT-PRV-19b default 指向不存在的 id 会被点名，而不是悄悄改道', async () => {
+    await writeConfig({ default: 'deepsek' })
+    const catalog = await buildCatalog({ dataDir: dir, configFile, env: {} })
+    expect(catalog.defaultId).not.toBe('deepsek')
+    expect(catalog.warnings?.some((item) => item.includes('deepsek'))).toBe(true)
+  })
+
+  it('UT-PRV-20 点名预设时可以换模型，且不污染目录本身', async () => {
+    const catalog = await buildCatalog({ dataDir: dir, configFile, env: { DEEPSEEK_API_KEY: 'sk-d' } })
+    const chain = resolveChain(catalog, { provider: 'deepseek', modelOverride: 'deepseek-reasoner' })
+    expect(chain[0]?.profile.model).toBe('deepseek-reasoner')
+    expect(catalog.entries.find((entry) => entry.profile.id === 'deepseek')?.profile.model).toBe('deepseek-chat')
+  })
+
+  it('UT-PRV-21 没点名 custom 时，残留的地址与 Key 不参与解析', async () => {
+    // 旧实现是"三项齐了就排第一"：界面上选了服务端预设，实际还在花自己的额度
+    const catalog = await buildCatalog({ dataDir: dir, configFile, env: { DEEPSEEK_API_KEY: 'sk-d' } })
+    const chain = resolveChain(catalog, {
+      provider: 'deepseek',
+      baseUrl: 'https://my.llm.example/v1',
+      model: 'mine',
+      apiKey: 'sk-mine',
+    })
+    expect(chain.some((item) => item.profile.id === 'custom')).toBe(false)
+    expect(chain[0]?.profile.id).toBe('deepseek')
+  })
+
+  it('UT-PRV-22 自定义通道的 maxTokens / temperature 会被夹到安全区', async () => {
+    const catalog = await buildCatalog({ dataDir: dir, configFile, env: {} })
+    const chain = resolveChain(catalog, {
+      provider: 'custom',
+      baseUrl: 'https://my.llm.example/v1',
+      model: 'mine',
+      apiKey: 'sk-mine',
+      maxTokens: 999_999,
+      temperature: 9,
+    })
+    expect(chain[0]?.profile.maxTokens).toBe(32_768)
+    expect(chain[0]?.profile.temperature).toBe(2)
+  })
+
+  it('UT-PRV-23 createCatalogSource 在配置文件变化后自动重建（改配置不必重启）', async () => {
+    await writeConfig({ providers: [{ id: 'moonshot', label: '第一次改名' }] })
+    const source = createCatalogSource({ dataDir: dir, configFile, env: {} })
+    const first = await source.get()
+    expect(first.entries.find((entry) => entry.profile.id === 'moonshot')?.profile.label).toBe('第一次改名')
+
+    await writeConfig({ providers: [{ id: 'moonshot', label: '第二次改名，长度不同以确保 mtime/size 变化' }] })
+    const second = await source.get()
+    expect(second.entries.find((entry) => entry.profile.id === 'moonshot')?.profile.label).toBe(
+      '第二次改名，长度不同以确保 mtime/size 变化',
+    )
   })
 })
 

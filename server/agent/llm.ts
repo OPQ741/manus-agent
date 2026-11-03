@@ -251,3 +251,73 @@ export async function testConnection(config: LlmConfig): Promise<{ ms: number; s
   }
   return { ms: Date.now() - started, sample: text.trim().slice(0, 40) }
 }
+
+/** 明显不是聊天补全的模型：列表里留着只会让人选错（选完生成必 400）。 */
+const NON_CHAT = /(embed|rerank|whisper|tts|dall-e|moderation|image|speech|transcri|sd[-_]|stable-diffusion)/i
+
+/**
+ * 问上游「你有哪些模型」。
+ *
+ * 这是把"填一个模型名"变成"从列表里选一个"的唯一前提：模型名拼错是自定义接入
+ * 最高频的失败原因，而且报错往往只有一句 400，用户根本不知道该改成什么。
+ *
+ * 只读 `GET {baseUrl}/models`（OpenAI 兼容规范），不猜任何厂商私有接口；
+ * 拉不到不算致命 —— 界面仍然允许手填。
+ */
+export async function listModels(config: {
+  baseUrl: string
+  apiKey?: string
+  headers?: Record<string, string>
+  timeoutMs?: number
+}): Promise<string[]> {
+  const guard = validateBaseUrl(config.baseUrl)
+  if (!guard.ok) throw new LlmError('llm_network', guard.reason)
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 10_000)
+  try {
+    const res = await fetch(`${guard.url}/models`, {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${config.apiKey || 'anonymous'}`,
+        ...config.headers,
+      },
+      signal: controller.signal,
+    })
+    if (!res.ok) {
+      const detail = await readError(res)
+      throw new LlmError(mapStatus(res.status), `拉取模型列表失败（${res.status}）：${detail}`, { status: res.status })
+    }
+    const body = (await res.json()) as unknown
+    const rows = Array.isArray(body)
+      ? body
+      : ((body as { data?: unknown; models?: unknown })?.data ?? (body as { models?: unknown })?.models)
+    const ids: string[] = []
+    if (Array.isArray(rows)) {
+      for (const row of rows) {
+        const id =
+          typeof row === 'string'
+            ? row
+            : typeof (row as { id?: unknown })?.id === 'string'
+              ? (row as { id: string }).id
+              : typeof (row as { name?: unknown })?.name === 'string'
+                ? (row as { name: string }).name
+                : ''
+        if (!id) continue
+        if (NON_CHAT.test(id)) continue
+        ids.push(id)
+      }
+    }
+    return [...new Set(ids)].sort((a, b) => a.localeCompare(b)).slice(0, 300)
+  } catch (error) {
+    if (error instanceof LlmError) throw error
+    if ((error as Error).name === 'AbortError') {
+      throw new LlmError('llm_timeout', '拉取模型列表超时（10s 无响应）', { retryable: true })
+    }
+    throw new LlmError('llm_network', '拉取模型列表失败：' + ((error as Error).message ?? '网络错误'), {
+      retryable: true,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+}

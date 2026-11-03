@@ -20,11 +20,12 @@ import type {
   PublicSettings,
 } from '../shared/types'
 import { PROMPT_MAX_LENGTH } from '../shared/types'
-import { LlmError, testConnection, validateBaseUrl } from './agent/llm'
+import { LlmError, listModels, testConnection, validateBaseUrl } from './agent/llm'
 import { QueueFullError, projectedWait, waitForSlot } from './agent/queue'
 import {
   buildCatalog,
   catalogView,
+  createCatalogSource,
   resolveChain,
   type ResolvedCatalog,
   type ResolvedProvider,
@@ -34,7 +35,7 @@ import { assemble, entryPath } from './preview/assemble'
 import { injectTweak, sanitizeTweak } from './preview/tweak'
 import { createZip } from './export/zip'
 import { seedDatabase } from './store/seed'
-import { Store, resolveDataFile } from './store/store'
+import { Store, resolveDataFile, type StoredSettings } from './store/store'
 
 const DATA_DIR = resolve(process.env.NUCLEUS_DATA_DIR ?? 'data')
 const CLIENT_DIR = resolve(process.env.NUCLEUS_CLIENT_DIR ?? 'dist/client')
@@ -114,6 +115,19 @@ function sanitizeDesign(input: Partial<DesignPrefs> | undefined, fallback: Desig
   return design
 }
 
+/** 自定义通道的输出上限：给一个人类填得出来的区间，别让一个 0 或 1e9 把上游打爆。 */
+function sanitizeMaxTokens(input: number | null | undefined, fallback?: number): number | undefined {
+  if (input === null) return undefined
+  if (typeof input !== 'number' || !Number.isFinite(input)) return fallback
+  return Math.min(Math.max(Math.round(input), 256), 32_768)
+}
+
+function sanitizeTemperature(input: number | null | undefined, fallback?: number): number | undefined {
+  if (input === null) return undefined
+  if (typeof input !== 'number' || !Number.isFinite(input)) return fallback
+  return Math.min(Math.max(input, 0), 2)
+}
+
 /** 正在进行的生成：项目 id → 中断控制器。用来实现「停止并保留」。 */
 const running = new Map<string, AbortController>()
 
@@ -126,17 +140,53 @@ function activeOf(chain: ResolvedProvider[]): ProviderInfo | null {
 
 export function settingsView(store: Store, catalog: ResolvedCatalog): PublicSettings {
   const settings = store.getSettings()
-  const chain = resolveChain(catalog, {
-    baseUrl: settings.baseUrl,
-    model: settings.model,
-    apiKey: settings.apiKey,
-    provider: settings.provider,
-  })
+  const chain = resolveChain(catalog, userFromSettings(settings))
   return {
     ...store.publicSettings(),
     providers: catalogView(catalog),
     active: activeOf(chain),
+    activeReason: explainActive(catalog, settings, chain),
+    warnings: catalog.warnings ?? [],
   }
+}
+
+/**
+ * 「为什么是这一家」的一句话解释。
+ *
+ * 解析链有三层回退（点名 → 主力 → 免 Key），任何一层静默失效，用户看到的都是
+ * "我明明选了 A 却在跑 B"。与其让他去猜 Key 是不是没保存，不如直接告诉他。
+ */
+function explainActive(
+  catalog: ResolvedCatalog,
+  settings: { provider: string; baseUrl: string; model: string; apiKey: string },
+  chain: ResolvedProvider[],
+): string {
+  const first = chain[0]
+  if (!first) return '没有可用通道：免 Key 通道被关掉了，也没有配置任何 Key'
+  const provider = settings.provider.trim()
+
+  if (provider === 'custom') {
+    if (first.profile.id === 'custom') return '使用你自带的 Key'
+    if (!settings.baseUrl.trim() || !settings.model.trim() || !settings.apiKey.trim()) {
+      return '自带 Key 还差 Base URL / 模型名 / Key 其中一项，已回退到服务端通道'
+    }
+    return '自带 Key 的地址不可用（内网地址会被拒绝），已回退到服务端通道'
+  }
+
+  if (provider) {
+    const named = catalog.entries.find((entry) => entry.profile.id === provider)
+    if (!named) return `点名的通道「${provider}」不在目录里，已回退到 ${first.profile.label}`
+    if (!named.ready) return `「${named.profile.label}」还没有 Key，已回退到 ${first.profile.label}`
+    if (first.profile.id === provider) {
+      const model = first.profile.model
+      return `按你的选择使用「${named.profile.label}」（${model}）`
+    }
+    return `点名的「${named.profile.label}」这次没排上，已回退到 ${first.profile.label}`
+  }
+
+  return first.profile.id === catalog.defaultId
+    ? '服务端默认通道'
+    : `服务端默认通道不可用，已回退到 ${first.profile.label}`
 }
 
 interface AttemptResult {
@@ -224,9 +274,7 @@ async function handleGenerate(
 
   const settings = store.getSettings()
   const chain = resolveChain(catalog, {
-    baseUrl: settings.baseUrl,
-    model: settings.model,
-    apiKey: settings.apiKey,
+    ...userFromSettings(settings),
     provider: (body.provider ?? settings.provider) || undefined,
   })
   if (chain.length === 0) {
@@ -561,6 +609,13 @@ export async function createNucleusServer(options: ServerOptions = {}) {
   const clientDir = resolve(options.clientDir ?? CLIENT_DIR)
   const store = await Store.open(resolveDataFile(dataDir))
   const catalog = options.catalog ?? (await buildCatalog({ dataDir, env }))
+  /**
+   * 注入目录（测试、脚本）时它是静态的；生产走带 mtime 检测的源 ——
+   * 改完 config/providers.json 或 data/providers.local.json 不必重启进程。
+   */
+  const catalogSource = options.catalog
+    ? { get: async () => options.catalog as ResolvedCatalog }
+    : createCatalogSource({ dataDir, env })
   const seeded = await seedDatabase(store)
 
   const server = createServer(async (req, res) => {
@@ -569,6 +624,13 @@ export async function createNucleusServer(options: ServerOptions = {}) {
     const segments = pathname.split('/').filter(Boolean)
     const method = req.method ?? 'GET'
 
+    /**
+     * 按需取目录：只有真用到模型配置的接口才去 stat 配置文件，
+     * 静态资源请求不受影响；同一个请求内多次取用共享同一份快照。
+     */
+    let snapshot: ResolvedCatalog | null = null
+    const getCatalog = async () => (snapshot ??= await catalogSource.get())
+
     try {
       // 读接口只认 GET/HEAD：以前不校验方法，DELETE /api/health 这类错误调用
       // 会拿到 200 + 正常 JSON，调用方完全看不出自己用错了方法。
@@ -576,6 +638,7 @@ export async function createNucleusServer(options: ServerOptions = {}) {
 
       if (pathname === '/api/health') {
         if (!READ_METHODS.has(method)) throw new HttpError(405, 'bad_request', '不支持的方法')
+        const catalog = await getCatalog()
         const chain = resolveChain(catalog, storeSettingsUser(store))
         sendJson(res, 200, {
           ok: true,
@@ -590,7 +653,7 @@ export async function createNucleusServer(options: ServerOptions = {}) {
 
       if (pathname === '/api/settings') {
         if (method === 'GET' || method === 'HEAD') {
-          sendJson(res, 200, settingsView(store, catalog))
+          sendJson(res, 200, settingsView(store, await getCatalog()))
           return
         }
         if (method === 'PUT') {
@@ -598,7 +661,10 @@ export async function createNucleusServer(options: ServerOptions = {}) {
             provider?: string
             baseUrl?: string
             model?: string
+            modelOverride?: string
             apiKey?: string
+            maxTokens?: number | null
+            temperature?: number | null
             design?: Partial<DesignPrefs>
           }>(req)
           const current = store.getSettings()
@@ -616,16 +682,59 @@ export async function createNucleusServer(options: ServerOptions = {}) {
           await store.updateSettings({
             provider: typeof body.provider === 'string' ? body.provider.trim().slice(0, 40) : current.provider,
             baseUrl,
-            model: typeof body.model === 'string' ? body.model.trim().slice(0, 80) : current.model,
+            model: typeof body.model === 'string' ? body.model.trim().slice(0, 120) : current.model,
+            modelOverride:
+              typeof body.modelOverride === 'string' ? body.modelOverride.trim().slice(0, 120) : current.modelOverride,
+            maxTokens: sanitizeMaxTokens(body.maxTokens, current.maxTokens),
+            temperature: sanitizeTemperature(body.temperature, current.temperature),
             // 显式传空串 = 清除 Key；不传这个键 = 保持不动。
             // 少了这条，访客换到服务端预设后，自己的旧 Key 会一直悄悄优先。
             apiKey: typeof body.apiKey === 'string' ? body.apiKey.trim() : current.apiKey,
             design: sanitizeDesign(body.design, current.design),
           })
-          sendJson(res, 200, settingsView(store, catalog))
+          sendJson(res, 200, settingsView(store, await getCatalog()))
           return
         }
         throw new HttpError(405, 'bad_request', '不支持的方法')
+      }
+
+      /**
+       * 拉上游模型列表。
+       *
+       * 两种用法：`{ provider }` 拉某个已配置预设的（用服务端的 Key），
+       * 或 `{ baseUrl, apiKey }` 拉用户正在填的草稿（还不用保存）。
+       * 拉不到不算错 —— 前端允许继续手填模型名。
+       */
+      if (pathname === '/api/settings/models' && method === 'POST') {
+        const body = await readJson<{ baseUrl?: string; apiKey?: string; provider?: string }>(req)
+        const current = store.getSettings()
+        const named = body.provider && body.provider !== 'custom' ? (await getCatalog()).entries.find((entry) => entry.profile.id === body.provider) : undefined
+
+        let target: { baseUrl: string; apiKey: string; headers?: Record<string, string>; source: string }
+        if (named) {
+          if (!named.ready) throw new HttpError(412, 'provider_unavailable', `「${named.profile.label}」还没有 Key，先填 Key 再拉列表`)
+          target = { baseUrl: named.profile.baseUrl, apiKey: named.apiKey, headers: named.profile.headers, source: named.profile.label }
+        } else {
+          const rawBase = (body.baseUrl ?? current.baseUrl).trim()
+          if (!rawBase) throw new HttpError(400, 'bad_request', '先填 Base URL')
+          const guard = validateBaseUrl(rawBase)
+          if (!guard.ok) throw new HttpError(400, 'bad_request', guard.reason)
+          target = {
+            baseUrl: guard.url,
+            apiKey: (body.apiKey ?? current.apiKey).trim(),
+            source: '自定义通道',
+          }
+        }
+
+        try {
+          const models = await listModels(target)
+          sendJson(res, 200, { models, source: target.source })
+        } catch (error) {
+          const code = error instanceof LlmError ? error.code : 'internal'
+          const message = error instanceof Error ? error.message : String(error)
+          sendJson(res, 502, { error: code, message })
+        }
+        return
       }
 
       if (pathname === '/api/settings/test' && method === 'POST') {
@@ -651,7 +760,7 @@ export async function createNucleusServer(options: ServerOptions = {}) {
             label: '我的 Key',
           }
         } else {
-          const chain = resolveChain(catalog, storeSettingsUser(store))
+          const chain = resolveChain(await getCatalog(), storeSettingsUser(store))
           const first = chain[0]
           if (!first) throw new HttpError(412, 'provider_unavailable', '没有可测的模型通道：先选一个已就绪的预设，或填自己的 Key')
           target = {
@@ -702,7 +811,7 @@ export async function createNucleusServer(options: ServerOptions = {}) {
             const body = await readJson<{ prompt?: string; provider?: string; design?: Partial<DesignPrefs> }>(req)
             const prompt = (body.prompt ?? '').trim().slice(0, PROMPT_MAX_LENGTH)
             const settings = store.getSettings()
-            const chain = resolveChain(catalog, {
+            const chain = resolveChain(await getCatalog(), {
               ...storeSettingsUser(store),
               provider: body.provider || settings.provider || undefined,
             })
@@ -721,7 +830,7 @@ export async function createNucleusServer(options: ServerOptions = {}) {
         }
 
         if (action === 'generate' && method === 'POST') {
-          await handleGenerate(req, res, store, id, catalog)
+          await handleGenerate(req, res, store, id, await getCatalog())
           return
         }
         if (action === 'export' && (method === 'GET' || method === 'HEAD')) {
@@ -837,14 +946,20 @@ export async function createNucleusServer(options: ServerOptions = {}) {
 }
 
 /** 存储里的设置 → 解析链需要的"访客自带上游"。 */
-function storeSettingsUser(store: Store) {
-  const settings = store.getSettings()
+function userFromSettings(settings: StoredSettings) {
   return {
     baseUrl: settings.baseUrl,
     model: settings.model,
     apiKey: settings.apiKey,
     provider: settings.provider,
+    modelOverride: settings.modelOverride,
+    maxTokens: settings.maxTokens,
+    temperature: settings.temperature,
   }
+}
+
+function storeSettingsUser(store: Store) {
+  return userFromSettings(store.getSettings())
 }
 
 /**

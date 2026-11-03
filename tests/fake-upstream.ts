@@ -82,6 +82,16 @@ export async function startFakeUpstream(
   let count = 0
 
   const server: Server = createServer((req, res) => {
+    // 模型列表：设置页「拉取列表」打的就是这个端点（OpenAI 兼容 GET /models）
+    if (req.method === 'GET' && req.url?.endsWith('/models')) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          data: [{ id: 'fake-model' }, { id: 'fake-coder' }, { id: 'text-embedding-3-small' }, { id: 'whisper-1' }],
+        }),
+      )
+      return
+    }
     const chunks: Buffer[] = []
     req.on('data', (chunk) => chunks.push(chunk as Buffer))
     req.on('end', () => {

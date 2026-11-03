@@ -31,6 +31,12 @@ export interface StoredSettings {
   provider: string
   baseUrl: string
   model: string
+  /** 点名预设时换模型；与 custom 的 model 分开存，切换模式时互不覆盖 */
+  modelOverride?: string
+  /** custom 通道的输出上限（不填走 8192） */
+  maxTokens?: number
+  /** custom 通道的温度（不填走 0.4） */
+  temperature?: number
   apiKey: string
   design: DesignPrefs
 }
@@ -386,12 +392,15 @@ export class Store {
    * 只含"访客自己填的那一份"：目录（providers）与实际生效的通道（active）由
    * HTTP 层用 ProviderCatalog 补 —— 存储层不该知道模型目录这件事。
    */
-  publicSettings(): Omit<PublicSettings, 'providers' | 'active'> {
+  publicSettings(): Omit<PublicSettings, 'providers' | 'active' | 'activeReason' | 'warnings'> {
     const settings = this.getSettings()
     return {
       provider: settings.provider,
       baseUrl: settings.baseUrl,
       model: settings.model,
+      modelOverride: settings.modelOverride ?? '',
+      maxTokens: settings.maxTokens,
+      temperature: settings.temperature,
       hasKey: Boolean(settings.apiKey),
       apiKeyMasked: maskKey(settings.apiKey),
       design: settings.design,

@@ -3,7 +3,8 @@
     "模型预设目录的覆盖文件（可入库，不要在这里放 Key）。",
     "本地开发要放 Key 就写 data/providers.local.json（已 gitignore），字段形状一样。",
     "部署侧更推荐环境变量：NUCLEUS_PROVIDER 选主力，<预设>.keyEnv 那个变量给 Key。",
-    "同 id 逐字段合并：只改 model 不会动掉 label/keyEnv/配额说明。"
+    "同 id 逐字段合并：只改 model 不会动掉 label/keyEnv/配额说明；models 数组给设置页当候选。",
+    "改完不需要重启：服务端按 mtime 检测变更，下一次请求即生效；写坏的字段会在设置页报警。"
   ],
   "default": "pollinations",
   "providers": [

@@ -826,36 +826,88 @@ pre {
   gap: 16px;
 }
 
-/* 当前生效通道：一条软底带子，比塞在按钮旁边的一行小字更好找 */
-.channel-band {
+/*
+ * 当前模型：一屏里唯一的主角。
+ *
+ * 上一版这里是一条"当前生效"小带子 + 下面 7 张卡片，同一个信息（谁在生效）
+ * 出现两遍；这一版把它做成一块带背景的主体块，右侧只放两个动作。
+ */
+.model-current {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
-  padding: 8px 11px;
-  border-radius: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
   background: var(--bg-soft);
 }
 
-.channel-band .dot {
+.model-current-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.model-current-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.model-current-name .dot {
   width: 7px;
   height: 7px;
   flex: none;
   border-radius: 50%;
   background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
 }
 
-.channel-band .dot.idle {
-  background: var(--warn);
+.model-current-meta {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
-.channel-mode {
+.model-current-reason {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* 同一通道换模型：一行就够，不占一整张卡片 */
+.model-switch {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  margin-bottom: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.settings-warnings {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.settings-hint {
+  font-size: 11.5px;
+  line-height: 1.85;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-hint code {
+  font-size: 11px;
 }
 
 /* 原底部那条版本/部署说明并入模型通道卡片：一行小字收尾，不再单占一个 Alert */
@@ -867,88 +919,119 @@ pre {
   line-height: 1.75;
 }
 
-.provider-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
-  gap: 10px;
+/* ---------------------------- 选模型抽屉 -------------------------------- */
+
+.model-group + .model-group {
+  margin-top: 16px;
+}
+
+.model-group-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 6px;
 }
 
 /*
- * 通道卡片不再是 antd Card：标题行 / 模型名 / 说明 / 动作四段等距排列，
- * 同一行里的卡片高度必须一致，否则截图中"有的卡片高、有的矮"。
+ * 行式列表而不是卡片网格：一屏能看 8 行，比较成本远低于在网格里扫。
+ * 这也是列表类设置页（Cursor / Chatbox / OpenRouter）共同的形态。
  */
-.provider-card {
+.model-row {
   display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 11px 12px 10px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 11px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--surface);
-  text-align: left;
   cursor: pointer;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+  transition: border-color 0.14s ease, background 0.14s ease;
 }
 
-.provider-card:hover {
+.model-row + .model-row {
+  margin-top: 6px;
+}
+
+.model-row:hover {
   border-color: var(--line-strong);
 }
 
-.provider-card.is-on {
+.model-row.is-on {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--accent-soft);
 }
 
-/* 「自带 Key」预填自这张卡片：虚线边框区别于"已选中"，不抢选中态 */
-.provider-card.is-source {
-  border-color: var(--accent);
-  border-style: dashed;
+.model-row-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.provider-card .prov-head {
+.model-row-title {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  min-width: 0;
 }
 
-.provider-card .prov-model {
+.model-row-sub {
+  font-family: var(--mono);
   font-size: 11px;
-  line-height: 1.5;
   color: var(--muted);
   overflow-wrap: anywhere;
 }
 
-.provider-card .prov-note {
+.model-row-note {
   font-size: 11.5px;
-  line-height: 1.62;
   color: var(--muted);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  line-height: 1.55;
 }
 
-.provider-card .prov-foot {
-  margin-top: auto;
-  padding-top: 7px;
+.model-row-side {
+  flex: none;
+  text-align: right;
+}
+
+.model-footer-hint {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+/* 自定义接入的常用服务商：一排小胶囊，点一下填好地址 */
+.preset-chips {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  font-size: 11.5px;
-  color: var(--muted);
 }
 
-.provider-card.is-on .prov-foot .prov-cta {
+.preset-chip {
+  padding: 3px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.7;
+  cursor: pointer;
+  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+
+.preset-chip:hover {
+  border-color: var(--accent);
   color: var(--accent);
-  font-weight: 550;
 }
 
-.provider-card .prov-key-link {
-  padding: 0;
-  height: auto;
-  font-size: 11.5px;
+.preset-chip.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--on-accent-soft);
 }
 
 /* 自带 Key 的三项里，模型名与 Key 并排；窄屏回到单列 */

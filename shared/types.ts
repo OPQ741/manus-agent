@@ -167,6 +167,11 @@ export interface PublicSettings {
   provider: string
   baseUrl: string
   model: string
+  /** 点名预设时临时换模型（不影响自带 Key 的 model） */
+  modelOverride: string
+  /** 自带 Key 的输出上限 / 温度：留空表示用平台默认值 */
+  maxTokens?: number
+  temperature?: number
   hasKey: boolean
   apiKeyMasked: string
   design: DesignPrefs
@@ -174,6 +179,16 @@ export interface PublicSettings {
   providers: ProviderOption[]
   /** 这一次实际会打给谁（访客自带 Key 时是他自己，否则是服务端主力） */
   active: ProviderInfo | null
+  /**
+   * 为什么是这一家。
+   *
+   * 模型配置最常见的困惑不是"怎么填"，而是"我明明选了 A，怎么在跑 B"：
+   * 点名的那家没 Key、地址被 SSRF 拦下、Key 存了但没点名…都会静默回退。
+   * 把回退理由直接说出来，比让用户对着界面猜要省事得多。
+   */
+  activeReason: string
+  /** 目录加载时的问题（配置写坏了、条目缺字段被跳过），空数组表示一切正常 */
+  warnings: string[]
   version: string
 }
 
@@ -182,6 +197,8 @@ export interface ProviderOption {
   id: string
   label: string
   model: string
+  /** 这一家可切换的候选模型（目录里声明的，不是实时探测） */
+  models?: string[]
   baseUrl: string
   free: boolean
   ready: boolean

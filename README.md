@@ -87,23 +87,31 @@ npm start          # 自动 build，监听 http://localhost:8787
 
 | 方式               | 怎么做                                                                                                                | 生效范围             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| ① 访客自带 Key     | 在 `/settings` 选「我的 Key」，填 Base URL + 模型名 + Key；可「测试连接」，也可一键清除交回服务端通道                  | 只影响这位访客       |
+| ① 自带 Key         | 在 `/settings` 点「更换模型」→「自定义接入」：选常用服务商（自动填地址）→ 粘 Key →「拉取列表」选模型 → 保存并使用        | 存在服务端，当前是**全局一份**（见下方说明）       |
 | ② 服务端预设       | 给环境变量 `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` / `MOONSHOT_API_KEY` / `ZHIPU_API_KEY` / `OPENROUTER_API_KEY` / `SILICONFLOW_API_KEY`，再用 `NUCLEUS_PROVIDER=deepseek` 指定主力 | 所有未自带 Key 的访客 |
 | ③ 零配置（默认）   | 什么都不填，走内置免 Key 通道 `pollinations`（GPT-OSS 20B）                                                            | 所有访客             |
 
-内置 7 条预设（`server/agent/providers.ts`），要改模型名、加自家网关或摘掉某一家，编辑 `config/providers.json` 即可（同 id 逐字段合并；Key 请放 `data/providers.local.json`，该文件已 gitignore）：
+内置 7 条预设（`server/agent/providers.ts`），要改模型名、加自家网关或摘掉某一家，编辑 `config/providers.json` 即可（同 id 逐字段合并；Key 请放 `data/providers.local.json`，该文件已 gitignore）。**改完不用重启**：服务端按文件 mtime 检测变更，下一次请求就用新目录；关掉的那条、写坏的 JSON、指向不存在的 `default` 都会在设置页顶部以警告列出来，不再静默忽略。
 
-| id             | 模型                              | 需要 Key            |
-| -------------- | --------------------------------- | ------------------- |
-| `pollinations` | `openai-fast`（GPT-OSS 20B）      | 免 Key              |
-| `deepseek`     | `deepseek-chat`                   | `DEEPSEEK_API_KEY`  |
-| `gemini`       | `gemini-2.5-flash`                | `GEMINI_API_KEY`    |
-| `moonshot`     | `kimi-k2-0905-preview`            | `MOONSHOT_API_KEY`  |
-| `zhipu`        | `glm-4.5-air`                     | `ZHIPU_API_KEY`     |
-| `openrouter`   | `deepseek/deepseek-chat`          | `OPENROUTER_API_KEY`|
-| `siliconflow`  | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | `SILICONFLOW_API_KEY` |
+| id             | 默认模型                          | 候选模型（设置页可直接换）        | 需要 Key            |
+| -------------- | --------------------------------- | --------------------------------- | ------------------- |
+| `pollinations` | `openai-fast`（GPT-OSS 20B）      | `openai-fast` / `openai` / `mistral` | 免 Key           |
+| `deepseek`     | `deepseek-chat`                   | `deepseek-chat` / `deepseek-reasoner` | `DEEPSEEK_API_KEY`  |
+| `gemini`       | `gemini-2.5-flash`                | 2.5 flash / 2.5 pro / 2.0 flash   | `GEMINI_API_KEY`    |
+| `moonshot`     | `kimi-k2-0905-preview`            | kimi-k2 / kimi-k2-turbo / v1-32k  | `MOONSHOT_API_KEY`  |
+| `zhipu`        | `glm-4.5-air`                     | glm-4.5-air / 4.5 / 4.5-flash     | `ZHIPU_API_KEY`     |
+| `openrouter`   | `deepseek/deepseek-chat`          | 任选一家（Claude / Gemini / Qwen…）| `OPENROUTER_API_KEY`|
+| `siliconflow`  | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | Qwen3-Coder / Qwen3-235B / DeepSeek-V3 | `SILICONFLOW_API_KEY` |
+
+`models` 只是**起点候选**，不是白名单：设置页里「拉取列表」会直接问上游 `GET {baseUrl}/models`（`POST /api/settings/models`），上游上了新模型不必回来改这张表；预设里没有的服务商，走「自定义接入」填三个字段即可。
 
 想直接接自家网关，用内联预设：`NUCLEUS_LLM_BASE_URL` + `NUCLEUS_LLM_MODEL`（+ `NUCLEUS_LLM_API_KEY`，或 `NUCLEUS_LLM_FREE=1` 声明它免 Key），它会自动抢下主力位。
+
+自定义通道另有两个高级参数（`maxTokens` / `temperature`，不填走 8192 / 0.4）：应用写到一半被截断时，先把输出上限调大。**内网地址默认被 SSRF 防护拒绝**，确实要接 Ollama / vLLM / 内网 one-api，需服务端显式加 `NUCLEUS_ALLOW_LOCAL_LLM=1`。
+
+> 设置页上那句「当前生效 · 原因」不是装饰：点名了却没 Key、地址被拦、Key 存了但没点名，解析链都会静默回退。把回退理由直接写出来，比让人对着界面猜"为什么不是我以为的那家"省事得多。
+
+> **已知边界**：访客设置（provider / Base URL / Key）目前存在服务端的**同一条记录**里，不是按访客隔离 —— 单人自建没问题，多人共用一份部署时，后保存的人会覆盖前一个人的通道。要隔离，得把 `StoredSettings` 改成按 `x-visitor` 分桶（接口已经带了访客标识，缺的是存储层分桶与默认值回退）。
 
 **免 Key 通道的现实约束**（2026-11-03 实测）：匿名档配额约「同一 IP 每 30 秒 1 次请求」，而线上服务端只有一个出口 IP，等于全站访客共享这条配额。所以平台侧做了三件事：按提供方 FIFO 排队（预计等待超 90 秒就换下一家）、失败自动故障转移、以及把"排队中/换了一家"用 `notice` 事件如实显示在对话流里。给了 Key 就不受这条限制。
 

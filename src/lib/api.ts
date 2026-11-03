@@ -114,9 +114,26 @@ export const api = {
     provider?: string
     baseUrl?: string
     model?: string
+    /** 点名预设时换模型；传空串 = 回到预设默认模型 */
+    modelOverride?: string
     apiKey?: string
+    /** null = 清掉自定义值，回到平台默认 */
+    maxTokens?: number | null
+    temperature?: number | null
     design?: Partial<DesignPrefs>
   }) => request<PublicSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(input) }),
+  /**
+   * 拉上游模型列表。
+   *
+   * 传 `provider` 用服务端已配好的 Key 拉；传 `baseUrl`(+`apiKey`) 拉用户正在填的草稿。
+   * 这是把「手写模型名」变成「从列表里选」的关键一步 —— 模型名拼错是自定义接入
+   * 最高频的失败原因，而报错往往只有一句 400。
+   */
+  listModels: (input: { baseUrl?: string; apiKey?: string; provider?: string }) =>
+    request<{ models: string[]; source: string }>('/api/settings/models', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   /**
    * 测试连接。
    *

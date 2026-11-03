@@ -355,6 +355,43 @@ describe('HTTP · 模型通道解析', () => {
     process.env.NUCLEUS_ALLOW_LOCAL_LLM = '1'
   })
 
+  it('IT-28 拉取上游模型列表：过滤掉非对话模型', async () => {
+    const response = await post('/api/settings/models', { baseUrl: fake.url, apiKey: 'sk-x' })
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { models: string[]; source: string }
+    expect(body.models).toContain('fake-model')
+    expect(body.models).toContain('fake-coder')
+    expect(body.models).not.toContain('text-embedding-3-small')
+    expect(body.models).not.toContain('whisper-1')
+    expect(body.source).toBe('自定义通道')
+  })
+
+  it('IT-29 点名一个还没配 Key 的预设去拉列表 → 412 并说明原因', async () => {
+    await withServer(
+      catalogOf([
+        { profile: profile({ id: 'needs-key', label: '还需要 Key 的一家', keyEnv: 'SOME_KEY' }), apiKey: '' },
+        { profile: profile({ id: 'ready-one', baseUrl: fake.url }), apiKey: 'sk-ready' },
+      ]),
+      async (url) => {
+        const response = await fetch(url + '/api/settings/models', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ provider: 'needs-key' }),
+        })
+        expect(response.status).toBe(412)
+        const body = (await response.json()) as { message: string }
+        expect(body.message).toContain('还没有 Key')
+      },
+    )
+  })
+
+  it('IT-30 目录告警与「为什么是这一家」会随设置一起返回', async () => {
+    const response = await fetch(base + '/api/settings')
+    const body = (await response.json()) as PublicSettings
+    expect(Array.isArray(body.warnings)).toBe(true)
+    expect(body.activeReason.length).toBeGreaterThan(0)
+  })
+
   it('IT-11 访客自带 Key 时优先打他自己的通道', async () => {
     fake.setMode('ok')
     await fetch(base + '/api/settings', {

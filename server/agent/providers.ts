@@ -33,6 +33,14 @@ export interface ProviderProfile {
   /** OpenAI 兼容 Base URL（会拼成 {baseUrl}/chat/completions） */
   baseUrl: string
   model: string
+  /**
+   * 同一家可切换的候选模型。
+   *
+   * 目录里写死一个模型名，会让"换个模型试试"变成必须改配置文件；
+   * 这里给一组常用候选，界面上就能直接换。真正的完整列表由
+   * `/api/models` 现拉（上游 `/v1/models`），预设只负责开箱可用。
+   */
+  models?: string[]
   /** 读 Key 的环境变量名；免 Key 通道为 undefined */
   keyEnv?: string
   /** 免 Key：不需要任何注册即可调用 */
@@ -60,6 +68,9 @@ export interface ProviderProfile {
  * 只有第一条是**免 Key**的，它保证"打开就能生成"；其余是"你给了 Key 就切过去"的
  * 主力候选 —— 全部是标准 OpenAI 兼容端点。想接自家网关，在 config/providers.json
  * 里追加同形状的一条即可，不必改代码。
+ *
+ * `models` 只是**开箱可选的起点**，不是白名单：设置页还有一个「拉取模型列表」
+ * 按钮，直接问上游 `/models`，所以上游上了新模型也不用回来改这张表。
  */
 export const BUILTIN_PROVIDERS: ProviderProfile[] = [
   {
@@ -67,6 +78,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     label: '免 Key · GPT-OSS 20B',
     baseUrl: 'https://text.pollinations.ai/openai',
     model: 'openai-fast',
+    models: ['openai-fast', 'openai', 'mistral'],
     free: true,
     maxTokens: 12000,
     temperature: 0.4,
@@ -84,6 +96,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     label: 'DeepSeek V3',
     baseUrl: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
     keyEnv: 'DEEPSEEK_API_KEY',
     maxTokens: 8192,
     temperature: 0.4,
@@ -96,6 +109,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     label: 'Gemini 2.5 Flash',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     model: 'gemini-2.5-flash',
+    models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
     keyEnv: 'GEMINI_API_KEY',
     maxTokens: 8192,
     temperature: 0.5,
@@ -108,6 +122,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     label: 'Kimi K2',
     baseUrl: 'https://api.moonshot.cn/v1',
     model: 'kimi-k2-0905-preview',
+    models: ['kimi-k2-0905-preview', 'kimi-k2-turbo-preview', 'moonshot-v1-32k'],
     keyEnv: 'MOONSHOT_API_KEY',
     maxTokens: 8192,
     temperature: 0.4,
@@ -120,6 +135,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     label: 'GLM-4.5-Air',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     model: 'glm-4.5-air',
+    models: ['glm-4.5-air', 'glm-4.5', 'glm-4.5-flash'],
     keyEnv: 'ZHIPU_API_KEY',
     maxTokens: 8192,
     temperature: 0.4,
@@ -132,6 +148,13 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     label: 'OpenRouter 聚合',
     baseUrl: 'https://openrouter.ai/api/v1',
     model: 'deepseek/deepseek-chat',
+    models: [
+      'deepseek/deepseek-chat',
+      'anthropic/claude-sonnet-4',
+      'google/gemini-2.5-flash',
+      'qwen/qwen3-coder',
+      'z-ai/glm-4.5-air',
+    ],
     keyEnv: 'OPENROUTER_API_KEY',
     maxTokens: 8192,
     temperature: 0.4,
@@ -145,6 +168,11 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     label: '硅基流动 · Qwen3 Coder',
     baseUrl: 'https://api.siliconflow.cn/v1',
     model: 'Qwen/Qwen3-Coder-30B-A3B-Instruct',
+    models: [
+      'Qwen/Qwen3-Coder-30B-A3B-Instruct',
+      'Qwen/Qwen3-235B-A22B-Instruct-2507',
+      'deepseek-ai/DeepSeek-V3',
+    ],
     keyEnv: 'SILICONFLOW_API_KEY',
     maxTokens: 8192,
     temperature: 0.4,
@@ -162,6 +190,7 @@ export interface CatalogFileEntry {
   label?: string
   baseUrl?: string
   model?: string
+  models?: string[]
   keyEnv?: string
   apiKey?: string
   free?: boolean
@@ -198,6 +227,14 @@ export interface ResolvedCatalog {
   defaultId: string
   /** 是否至少有一个可用提供方（免 Key 通道在，正常恒为 true） */
   ready: boolean
+  /**
+   * 装配过程中的问题：配置文件不是合法 JSON、某条缺 baseUrl/model 被跳过、
+   * `default` 指向不存在的 id…
+   *
+   * 这些以前全是**静默忽略**，于是"我改了配置怎么没生效"只能靠翻日志。
+   * 现在原样带到设置页上，一眼能看到是哪一行没被采纳。
+   */
+  warnings?: string[]
 }
 
 /* ------------------------------------------------------------------ */
@@ -250,6 +287,7 @@ function mergeProfile(base: ProviderProfile, patch: CatalogFileEntry): ProviderP
   if (patch.label) next.label = patch.label
   if (patch.baseUrl) next.baseUrl = patch.baseUrl
   if (patch.model) next.model = patch.model
+  if (patch.models?.length) next.models = patch.models.filter(Boolean)
   if (patch.keyEnv !== undefined) next.keyEnv = patch.keyEnv || undefined
   if (patch.free !== undefined && base.builtin) next.free = patch.free
   if (patch.maxTokens !== undefined) next.maxTokens = patch.maxTokens
@@ -262,14 +300,32 @@ function mergeProfile(base: ProviderProfile, patch: CatalogFileEntry): ProviderP
   return next
 }
 
-async function readCatalogFile(path: string): Promise<CatalogFile | null> {
+interface CatalogFileRead {
+  file: CatalogFile | null
+  warning?: string
+}
+
+/**
+ * 读一份目录文件。
+ *
+ * 两种失败必须分开：**文件不存在**是正常情况（可选覆盖文件），
+ * **文件存在但读不动**是配置事故 —— 后者要冒泡成 warning，不能装作没配。
+ */
+async function readCatalogFile(path: string): Promise<CatalogFileRead> {
+  let raw: string
   try {
-    const raw = await fs.readFile(path, 'utf8')
-    const parsed = JSON.parse(raw) as unknown
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
-    return parsed as CatalogFile
+    raw = await fs.readFile(path, 'utf8')
   } catch {
-    return null
+    return { file: null }
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { file: null, warning: `${path} 顶层必须是对象，已跳过` }
+    }
+    return { file: parsed as CatalogFile }
+  } catch (error) {
+    return { file: null, warning: `${path} 不是合法 JSON（${(error as Error).message}），已跳过` }
   }
 }
 
@@ -290,11 +346,12 @@ export async function buildCatalog(options: BuildCatalogOptions = {}): Promise<R
   const dataDir = resolve(options.dataDir ?? 'data')
   const repoFile = options.configFile ?? resolve('config/providers.json')
 
-  const [repoData, localData] = await Promise.all([
+  const reads = await Promise.all([
     readCatalogFile(repoFile),
     readCatalogFile(join(dataDir, 'providers.local.json')),
   ])
-  const files = [repoData, localData].filter((item): item is CatalogFile => item !== null)
+  const warnings: string[] = reads.map((item) => item.warning).filter((item): item is string => Boolean(item))
+  const files = reads.map((item) => item.file).filter((item): item is CatalogFile => item !== null)
 
   const patches = new Map<string, CatalogFileEntry>()
   const fileKeys = new Map<string, string>()
@@ -322,12 +379,16 @@ export async function buildCatalog(options: BuildCatalogOptions = {}): Promise<R
   // 配置文件里的新预设（例如自家网关）追加在后面
   for (const [id, patch] of patches) {
     if (merged.some((profile) => profile.id === id)) continue
-    if (!patch.baseUrl || !patch.model) continue
+    if (!patch.baseUrl || !patch.model) {
+      warnings.push(`providers.json 里的「${id}」缺 baseUrl 或 model，已跳过`)
+      continue
+    }
     merged.push({
       id,
       label: patch.label ?? id,
       baseUrl: patch.baseUrl,
       model: patch.model,
+      models: patch.models?.filter(Boolean),
       keyEnv: patch.keyEnv,
       free: patch.free,
       maxTokens: patch.maxTokens ?? 8192,
@@ -341,8 +402,12 @@ export async function buildCatalog(options: BuildCatalogOptions = {}): Promise<R
     })
   }
 
+  const inlineBase = env.NUCLEUS_LLM_BASE_URL?.trim()
   const inline = envProfile(env)
   if (inline) merged.unshift(inline)
+  else if (inlineBase) {
+    warnings.push('NUCLEUS_LLM_BASE_URL 没有生效：需要合法的公网 http(s) 地址，并且同时给出 NUCLEUS_LLM_MODEL')
+  }
 
   const order = files.map((file) => file.order).find((item) => item?.length)
   const byId = new Map(merged.map((profile) => [profile.id, profile]))
@@ -353,11 +418,18 @@ export async function buildCatalog(options: BuildCatalogOptions = {}): Promise<R
   }
   for (const profile of merged) if (!ordered.includes(profile)) ordered.push(profile)
 
-  const declaredDefault =
-    env.NUCLEUS_PROVIDER?.trim() ||
-    inline?.id ||
-    files.map((file) => file.default).find((id) => id && byId.has(id)) ||
-    FREE_PROVIDER_ID
+  const fromEnv = env.NUCLEUS_PROVIDER?.trim()
+  const fromFile = files.map((file) => file.default).find((id) => id && byId.has(id))
+  // default 写了但目标不存在（拼错 id / 那一条被 enabled:false 摘了）：说出名字，别静默改道
+  for (const file of files) {
+    if (file.default && !byId.has(file.default)) {
+      warnings.push(`providers.json 的 default「${file.default}」不在目录里，已忽略`)
+    }
+  }
+  if (fromEnv && !byId.has(fromEnv)) {
+    warnings.push(`NUCLEUS_PROVIDER=${fromEnv} 不在目录里（拼错或被 enabled:false 摘掉了），已回退`)
+  }
+  const declaredDefault = fromEnv || inline?.id || fromFile || FREE_PROVIDER_ID
   const defaultId = byId.has(declaredDefault) ? declaredDefault : ordered[0]?.id ?? FREE_PROVIDER_ID
 
   // 主力提到第一位；免 Key 通道若被选中，它本来就在链上
@@ -372,7 +444,7 @@ export async function buildCatalog(options: BuildCatalogOptions = {}): Promise<R
     return { profile, apiKey, ready: isReady(profile, apiKey) }
   })
 
-  return { entries, defaultId, ready: entries.some((entry) => entry.ready) }
+  return { entries, defaultId, ready: entries.some((entry) => entry.ready), warnings }
 }
 
 /* ------------------------------------------------------------------ */
@@ -388,15 +460,33 @@ export interface UserUpstream {
   baseUrl?: string
   model?: string
   apiKey?: string
-  /** 设置页点名的预设 id；'custom' 或空表示不点名 */
+  /** 设置页点名的预设 id；'custom' = 用上面三项 */
   provider?: string
+  /** 点名预设时换一个模型（不动 custom 的 model） */
+  modelOverride?: string
+  /** 自带 Key 的输出上限 / 温度；不填走平台默认 */
+  maxTokens?: number
+  temperature?: number
+}
+
+/** 自定义通道的参数夹到安全区：界面上填错一个数字，不该让整条通道 400。 */
+export function clampCustom(profile: ProviderProfile, user: UserUpstream): ProviderProfile {
+  const next: ProviderProfile = { ...profile }
+  if (Number.isFinite(user.maxTokens)) {
+    const value = Math.round(Number(user.maxTokens))
+    next.maxTokens = Math.min(Math.max(value, 256), 32_768)
+  }
+  if (Number.isFinite(user.temperature)) {
+    next.temperature = Math.min(Math.max(Number(user.temperature), 0), 2)
+  }
+  return next
 }
 
 /**
  * 这一次生成可用的提供方链（按尝试顺序）。
  *
- * 去重按 id：访客自带 Key 时链是 [custom, 主力, …, 免 Key]，
- * 点名了某个预设时它是 [点名, custom?, …]。
+ * 去重按 id：点名了某个预设时它是 [点名, 主力, …, 免 Key]；
+ * 点名「自带 Key」时是 [custom, 主力, …, 免 Key]。
  */
 export function resolveChain(catalog: ResolvedCatalog, user: UserUpstream = {}): ResolvedProvider[] {
   const chain: ResolvedProvider[] = []
@@ -405,28 +495,40 @@ export function resolveChain(catalog: ResolvedCatalog, user: UserUpstream = {}):
     if (chain.some((item) => item.profile.id === profile.id)) return
     chain.push({ profile, apiKey })
   }
+  const provider = user.provider?.trim() ?? ''
 
-  // ① 访客自带 Key：只对他自己生效
-  const userBase = user.baseUrl?.trim()
-  const userModel = user.model?.trim()
-  const userKey = user.apiKey?.trim()
-  if (userKey && userBase && userModel && validateBaseUrl(userBase).ok) {
-    push(
-      {
-        id: 'custom',
-        label: '我的模型',
-        baseUrl: userBase,
-        model: userModel,
-        maxTokens: 8192,
-        temperature: 0.4,
-      },
-      userKey,
-    )
+  // ① 自带 Key：**必须明确点名 custom** 才生效。
+  //    以前是"三项齐了就排第一"，于是切回服务端预设后，库里残留的 Key 仍然在打头 ——
+  //    界面上写的是服务端通道，实际花的还是自己的额度。
+  if (provider === 'custom') {
+    const userBase = user.baseUrl?.trim()
+    const userModel = user.model?.trim()
+    const userKey = user.apiKey?.trim()
+    if (userKey && userBase && userModel && validateBaseUrl(userBase).ok) {
+      push(
+        clampCustom(
+          {
+            id: 'custom',
+            label: '我的模型',
+            baseUrl: userBase,
+            model: userModel,
+            maxTokens: 8192,
+            temperature: 0.4,
+          },
+          user,
+        ),
+        userKey,
+      )
+    }
   }
 
-  // ② 点名预设 → 服务端目录顺序（主力在前，免 Key 兜底在后）
-  const named = user.provider && user.provider !== 'custom' ? catalog.entries.find((item) => item.profile.id === user.provider) : undefined
-  if (named) push(named.profile, named.apiKey)
+  // ② 点名预设（可带一个模型覆盖）→ 服务端目录顺序（主力在前，免 Key 兜底在后）
+  const named =
+    provider && provider !== 'custom' ? catalog.entries.find((item) => item.profile.id === provider) : undefined
+  if (named) {
+    const override = user.modelOverride?.trim()
+    push(override ? { ...named.profile, model: override } : named.profile, named.apiKey)
+  }
   for (const entry of catalog.entries) push(entry.profile, entry.apiKey)
 
   return chain
@@ -438,6 +540,7 @@ export function catalogView(catalog: ResolvedCatalog): ProviderOption[] {
     id: entry.profile.id,
     label: entry.profile.label,
     model: entry.profile.model,
+    models: entry.profile.models,
     baseUrl: entry.profile.baseUrl,
     free: Boolean(entry.profile.free),
     ready: entry.ready,
@@ -446,4 +549,69 @@ export function catalogView(catalog: ResolvedCatalog): ProviderOption[] {
     note: entry.profile.note,
     keyEnv: entry.profile.free ? undefined : entry.profile.keyEnv ?? (entry.profile.id === 'env' ? 'NUCLEUS_LLM_API_KEY' : undefined),
   }))
+}
+
+/* ------------------------------------------------------------------ */
+/* 目录热加载                                                          */
+/* ------------------------------------------------------------------ */
+
+export interface CatalogSource {
+  /** 取当前目录；配置文件 mtime/size 变了会自动重建，不必重启服务 */
+  get: (force?: boolean) => Promise<ResolvedCatalog>
+}
+
+/**
+ * 目录缓存 + 文件变更检测。
+ *
+ * 为什么需要它：`buildCatalog` 原本只在启动时跑一次，改完 `config/providers.json`
+ * 必须重启才算数 —— 这是"配置改了却没生效"最典型的来源（人不会记得自己没重启）。
+ * 现在每次取目录都 stat 一下两个文件（各一次，成本可忽略），变了就重建。
+ *
+ * 重建失败时继续用上一份可用目录：配置文件写坏不该让线上服务直接失去模型。
+ */
+export function createCatalogSource(options: BuildCatalogOptions = {}): CatalogSource {
+  const dataDir = resolve(options.dataDir ?? 'data')
+  const repoFile = options.configFile ?? resolve('config/providers.json')
+  const localFile = join(dataDir, 'providers.local.json')
+
+  let cache: ResolvedCatalog | null = null
+  let stamp = ''
+  let inflight: Promise<ResolvedCatalog> | null = null
+
+  const readStamp = async () => {
+    const parts = await Promise.all(
+      [repoFile, localFile].map(async (path) => {
+        try {
+          const stat = await fs.stat(path)
+          return `${stat.mtimeMs}:${stat.size}`
+        } catch {
+          return '-'
+        }
+      }),
+    )
+    return parts.join('|')
+  }
+
+  return {
+    async get(force = false) {
+      const next = await readStamp()
+      if (!force && cache && next === stamp) return cache
+      if (inflight) return inflight
+      const built = buildCatalog({ ...options, dataDir, configFile: repoFile })
+        .then((catalog) => {
+          cache = catalog
+          stamp = next
+          return catalog
+        })
+        .catch((error: unknown) => {
+          if (cache) return cache
+          throw error
+        })
+        .finally(() => {
+          inflight = null
+        })
+      inflight = built
+      return built
+    },
+  }
 }

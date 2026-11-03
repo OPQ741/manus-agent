@@ -431,14 +431,22 @@ try {
 
   await step('E2E-14 设置页可选预设，自带 Key 后立刻优先', async () => {
     await page.goto(BASE + '/#/settings', { waitUntil: 'networkidle' })
-    const cards = page.locator('.provider-card')
-    await cards.first().waitFor({ timeout: 10_000 })
-    const labels = await cards.allInnerTexts()
+    await page.locator('.model-current').waitFor({ timeout: 10_000 })
+    // 主屏只回答"现在用哪个"：一眼能看到通道名与为什么是它
+    const current = await page.locator('.model-current').innerText()
+    assert.match(current, /GPT-OSS|DeepSeek|Gemini|Kimi|GLM|Qwen|模型/, '设置页没有显示当前模型')
+
+    // 其余候选收在抽屉里：点「更换模型」才展开
+    await page.getByRole('button', { name: /更换模型/ }).click()
+    const rows = page.locator('.model-row')
+    await rows.first().waitFor({ timeout: 10_000 })
+    const labels = await rows.allInnerTexts()
     assert.ok(labels.some((text) => /免 Key/.test(text)), '设置页没有免 Key 通道可选')
     assert.ok(labels.some((text) => /DeepSeek|Gemini|Kimi/i.test(text)), '设置页没有预设模型可选')
     // 目录只回显"从哪个环境变量读 Key"，绝不能把 Key 本身发到前端
     const html = await page.content()
     assert.ok(!/sk-[a-zA-Z0-9]{12,}/.test(html), '设置页里出现了疑似明文 Key')
+    await page.keyboard.press('Escape')
     await page.goto(BASE + '/', { waitUntil: 'networkidle' })
   })
 
