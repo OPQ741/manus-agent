@@ -519,7 +519,11 @@ export function resolveChain(catalog: ResolvedCatalog, user: UserUpstream = {}):
         clampCustom(
           {
             id: 'custom',
-            label: '我的模型',
+            // 不再叫"我的模型"：那是"我用哪家的模型"这个问题的**答案**，
+            // 却被当成了通道的名字，界面上于是出现"我的模型 / 我的模型"这种
+            // 既没说清服务商、也没说清模型名的标签。通道叫"自定义接入"，
+            // 模型名单独展示（providerModel）。
+            label: '自定义接入',
             baseUrl: userBase,
             model: userModel,
             maxTokens: 8192,

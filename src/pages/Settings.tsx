@@ -37,7 +37,7 @@ import {
 import {
   ApiOutlined,
   CheckCircleFilled,
-  DownOutlined,
+  CopyOutlined,
   KeyOutlined,
   ReloadOutlined,
   SearchOutlined,
@@ -135,6 +135,19 @@ export function SettingsPage() {
     setView('list')
     setQuery('')
     setPickerOpen(true)
+  }
+
+  /**
+   * 手填模型名：输入只进草稿，回车/失焦才提交。
+   * 每敲一个字就 PUT 会打出一串互相覆盖的请求，最后落库的很可能是中间态。
+   */
+  const commitModel = () => {
+    if (!currentId || currentId === CUSTOM) return
+    const next = (modelDraft ?? '').trim()
+    if (!next) return
+    const prev = settings?.modelOverride || active?.model || ''
+    setModelDraft(null)
+    if (next !== prev) void put({ provider: currentId, modelOverride: next })
   }
 
   const startCustom = (option?: ProviderOption) => {
@@ -317,7 +330,31 @@ export function SettingsPage() {
                     {!active.free && currentId === CUSTOM ? <Badge tone="accent">自带 Key</Badge> : null}
                     {!active.free && currentId !== CUSTOM ? <Badge tone="accent">服务端</Badge> : null}
                   </div>
-                  <div className="model-current-meta mono">{active.model}</div>
+                  {/* 模型名单独一行、加大字号并做成可复制的胶囊：
+                      "哪个通道"和"哪个模型"是两个问题，混在一行小字里谁都读不準 */}
+                  <div className="model-current-model">
+                    <span className="model-name mono">{active.model}</span>
+                    <Button
+                      size="small"
+                      type="text"
+                      className="model-copy"
+                      icon={<CopyOutlined />}
+                      aria-label="复制模型名"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(active.model)
+                          toast('模型名已复制')
+                        } catch {
+                          toast(active.model)
+                        }
+                      }}
+                    />
+                    {activeOption?.models && activeOption.models.length > 1 ? (
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        · 这一家还有 {activeOption.models.length - 1} 个可选模型
+                      </Text>
+                    ) : null}
+                  </div>
                   <div className="model-current-reason">{settings.activeReason}</div>
                 </div>
                 <Space size={8} wrap>
@@ -348,32 +385,42 @@ export function SettingsPage() {
             </Flex>
           )}
 
-          {/* 同一家换模型：省掉"为了换个模型去改配置文件"这一步 */}
-          {modelChoices.length > 1 && currentId !== CUSTOM && currentId ? (
+          {/* 同一家换模型：把候选模型名铺成一排胶囊。
+              上版是一个 AutoComplete —— 模型名藏在输入框里，要展开才知道有哪些，
+              而"这家还有哪些模型"正是这一步唯一的决策信息。 */}
+          {currentId && currentId !== CUSTOM ? (
             <div className="model-switch">
               <Text type="secondary" style={{ fontSize: 12.5 }}>
                 同一通道内换模型
               </Text>
-              <AutoComplete
+              {modelChoices.length > 0 ? (
+                <div className="model-chips">
+                  {modelChoices.map((value) => {
+                    const on = value === (settings?.modelOverride || active?.model)
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        className={`model-chip mono${on ? ' is-on' : ''}`}
+                        aria-pressed={on}
+                        disabled={busy}
+                        onClick={() => void put({ provider: currentId, modelOverride: value })}
+                      >
+                        {value}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : null}
+              <Input
                 size="small"
-                style={{ minWidth: 280 }}
-                value={modelDraft ?? (settings?.modelOverride || active?.model || '')}
-                options={modelChoices.map((value) => ({ value }))}
-                suffixIcon={<DownOutlined />}
-                // 每敲一个字都 PUT 会打出一串请求，还会互相覆盖：输入只进草稿
-                onChange={(value) => setModelDraft(value)}
-                onSelect={(value) => {
-                  setModelDraft(null)
-                  void put({ provider: currentId, modelOverride: String(value) })
-                }}
-                onBlur={() => {
-                  if (modelDraft === null) return
-                  const next = modelDraft.trim()
-                  const prev = settings?.modelOverride || active?.model || ''
-                  setModelDraft(null)
-                  if (next !== prev) void put({ provider: currentId, modelOverride: next })
-                }}
-                placeholder="选一个模型，或直接填模型名"
+                className="model-custom-input mono"
+                value={modelDraft ?? ''}
+                placeholder="或手填模型名"
+                spellCheck={false}
+                onChange={(event) => setModelDraft(event.target.value)}
+                onPressEnter={() => commitModel()}
+                onBlur={() => commitModel()}
               />
             </div>
           ) : null}
@@ -519,7 +566,12 @@ export function SettingsPage() {
                             {item.free ? <Badge tone="ok">免 Key</Badge> : null}
                             {!item.ready ? <Badge tone="warn">未配置</Badge> : null}
                           </div>
-                          <div className="model-row-sub mono">{item.model}</div>
+                          <div className="model-row-sub">
+                            <span className="model-pill mono">{item.model}</span>
+                            {item.models && item.models.length > 1 ? (
+                              <span className="model-row-count">{item.models.length} 个可选</span>
+                            ) : null}
+                          </div>
                           {item.note ? <div className="model-row-note">{item.note}</div> : null}
                         </div>
                         <div className="model-row-side">

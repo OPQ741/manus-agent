@@ -101,6 +101,7 @@ export function summarize(project: Project): ProjectSummary {
     fileCount: project.files.length,
     provider: project.provider,
     providerLabel: project.providerLabel,
+    providerModel: project.providerModel,
     createdBy: project.createdBy,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
@@ -121,7 +122,7 @@ export interface CommitInput {
   usage: Usage
   label?: string
   /** 这次实际用了哪家模型；回滚等场景可以不传（保持原值） */
-  provider?: { id: ProviderId; label: string }
+  provider?: { id: ProviderId; label: string; model?: string }
 }
 
 export class Store {
@@ -225,6 +226,7 @@ export class Store {
     createdBy?: string
     provider?: ProviderId
     providerLabel?: string
+    providerModel?: string
   }): Promise<Project> {
     const now = Date.now()
     const project: Project = {
@@ -234,6 +236,7 @@ export class Store {
       summary: input.prompt?.slice(0, 80) ?? '',
       provider: input.provider ?? '',
       providerLabel: input.providerLabel ?? '',
+      providerModel: input.providerModel,
       design: input.design ?? { ...this.db.settings.design },
       files: [],
       plan: null,
@@ -325,6 +328,7 @@ export class Store {
     if (input.provider) {
       project.provider = input.provider.id
       project.providerLabel = input.provider.label
+      if (input.provider.model) project.providerModel = input.provider.model
     }
     if (input.plan?.name) project.name = input.plan.name
     if (input.plan?.summary) project.summary = input.plan.summary

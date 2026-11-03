@@ -273,9 +273,23 @@ async function handleGenerate(
   if (running.has(projectId)) throw new HttpError(409, 'busy', '这个项目正在生成，请先停止或等它跑完')
 
   const settings = store.getSettings()
+  /**
+   * 本次生成可以点名「通道 + 模型」：两者都是**临时覆盖**，不写回设置。
+   *
+   * 自带 Key 的模型名存在 settings.model 而不是 modelOverride 里，
+   * 所以自定义通道换模型要改前者的副本；其余走 modelOverride。
+   */
+  const modelOverride = (body.model ?? '').trim().slice(0, 120)
+  const user = userFromSettings(settings)
+  const namedProvider = (body.provider ?? settings.provider) || undefined
   const chain = resolveChain(catalog, {
-    ...userFromSettings(settings),
-    provider: (body.provider ?? settings.provider) || undefined,
+    ...user,
+    provider: namedProvider,
+    ...(modelOverride
+      ? namedProvider === 'custom'
+        ? { model: modelOverride }
+        : { modelOverride }
+      : {}),
   })
   if (chain.length === 0) {
     throw new HttpError(
@@ -470,7 +484,9 @@ async function handleGenerate(
     prompt,
     usage: sink.usage,
     label,
-    provider: providerInfo ? { id: providerInfo.id, label: providerInfo.label } : undefined,
+    provider: providerInfo
+      ? { id: providerInfo.id, label: providerInfo.label, model: providerInfo.model }
+      : undefined,
   })
 
   if (!committed) {
@@ -497,6 +513,9 @@ async function handleGenerate(
       provider: providerInfo,
       version: committed.version.seq,
       partial: aborted || undefined,
+      /** 这一轮动了哪些文件：历史消息里的「结果卡」据此列出文件名，而不是只报一个数字 */
+      changed: committed.version.changed.slice(0, 24),
+      files: files.length,
     },
   })
 
@@ -822,6 +841,7 @@ export async function createNucleusServer(options: ServerOptions = {}) {
               createdBy: String(req.headers['x-visitor'] ?? 'anonymous').slice(0, 40),
               provider: active?.id ?? '',
               providerLabel: active?.label ?? '',
+              providerModel: active?.model ?? '',
             })
             sendJson(res, 201, { project, previewHtml: '', checks: [] })
             return
@@ -863,9 +883,11 @@ export async function createNucleusServer(options: ServerOptions = {}) {
           return
         }
         if (method === 'PATCH') {
-          const body = await readJson<{ name?: string; tweak?: DesignTweak | null }>(req)
+          const body = await readJson<{ name?: string; summary?: string; tweak?: DesignTweak | null }>(req)
           const project = await store.updateProject(id, {
             ...(typeof body.name === 'string' && body.name.trim() ? { name: body.name.trim().slice(0, 40) } : {}),
+            // 简介可以在编辑弹窗里改；空串是"清空"，要真的写进去，不能用 truthy 判断
+            ...(typeof body.summary === 'string' ? { summary: body.summary.trim().slice(0, 140) } : {}),
             // 传 null 表示"恢复默认"；不传则不动
             ...('tweak' in body ? { tweak: sanitizeTweak(body.tweak) } : {}),
           })
@@ -898,6 +920,7 @@ export async function createNucleusServer(options: ServerOptions = {}) {
             fileCount: project.files.length,
             provider: project.provider,
             providerLabel: project.providerLabel,
+            providerModel: project.providerModel,
             createdBy: project.createdBy,
             createdAt: project.createdAt,
             updatedAt: project.updatedAt,

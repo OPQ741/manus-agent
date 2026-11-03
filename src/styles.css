@@ -135,6 +135,30 @@ pre {
   margin-inline-end: 0;
 }
 
+/*
+ * 角色头像：对话里"谁在说话"的第一眼信号。
+ * Agent 本人用品牌 Logo，其余角色用同尺寸的渐变方块 + 图标 —— 形状一致、颜色区分，
+ * 扫一眼就知道哪句是判断、哪句是执行结果。
+ */
+.agent-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: #fff;
+  line-height: 1;
+  box-shadow: 0 0 0 1px rgba(20, 20, 26, 0.06);
+  user-select: none;
+}
+
+.agent-avatar .anticon {
+  line-height: 1;
+}
+
+[data-theme='dark'] .agent-avatar {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
 .diff-add {
   color: var(--ok);
 }
@@ -163,6 +187,268 @@ pre {
   flex: 1;
   display: flex;
   justify-content: center;
+}
+
+/* 项目标题：只负责"读"，编辑入口是后面那支笔 —— 就地输入态会让顶栏抖一下 */
+.project-title {
+  font-size: 13.5px;
+  font-weight: 650;
+  max-width: min(240px, 22vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-edit {
+  color: var(--muted);
+}
+
+.project-form .ant-form-item {
+  margin-bottom: 16px;
+}
+
+.project-form-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+/* ------------------------------ 模型入口 -------------------------------- */
+
+/*
+ * 顶栏的模型按钮。
+ *
+ * 上版是一枚只读徽章，写着"我的模型"—— 既没说是哪家、也没说哪个模型。
+ * 现在它是「通道 + 模型名 + 展开箭头」三段式：不点开就能读到答案，
+ * 点开才是配置。信息与动作分层，比把两者塞进一个徽章里清楚。
+ */
+.model-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  max-width: 300px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.model-btn:hover {
+  border-color: var(--line-strong);
+  background: var(--bg-soft);
+}
+
+.model-btn-icon {
+  font-size: 11px;
+  color: var(--warn);
+  flex: none;
+}
+
+.model-btn-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 108px;
+}
+
+.model-btn-model {
+  font-size: 10.5px;
+  color: var(--muted);
+  background: var(--bg-soft);
+  border-radius: 5px;
+  padding: 1px 5px;
+  max-width: 148px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-btn-caret {
+  font-size: 8px;
+  color: var(--muted);
+  flex: none;
+}
+
+/* 弹层内部 */
+
+.model-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.model-menu-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.model-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.model-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.model-dot.free {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 16%, transparent);
+}
+
+.model-menu-model {
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.model-menu-reason {
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.model-menu-divider {
+  margin: 9px 0 !important;
+}
+
+.model-menu-section + .model-menu-section {
+  margin-top: 10px;
+}
+
+.model-menu-caption {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.model-menu-caption-hint {
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.model-options {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 208px;
+  overflow: auto;
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.model-option:hover {
+  background: var(--bg-soft);
+}
+
+.model-option.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.model-option-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.model-option-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.model-option-model {
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-option-check {
+  color: var(--accent);
+  font-size: 12px;
+  flex: none;
+}
+
+.model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.model-chip {
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.model-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.model-chip.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--on-accent-soft);
+}
+
+.model-menu-foot {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
 }
 
 .brand {
@@ -352,108 +638,576 @@ pre {
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 16px 14px;
+  gap: 18px;
+  padding: 16px 14px 20px;
 }
 
-.msg {
+.chat-empty {
+  padding: 6px 2px;
+}
+
+/* ------------------------------ 对话：轮次 ------------------------------- */
+
+.turn {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
 }
 
-.msg.user {
-  align-items: flex-end;
+/* 用户：靠右，头像在最右，气泡在左 —— 与下方 Agent 的左右分栏形成"谁在说"的稳定位置感 */
+.turn.user {
+  flex-direction: row-reverse;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 8px;
 }
 
-.msg .who {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--muted);
-}
-
-.msg .bubble {
-  max-width: 88%;
-  padding: 9px 12px;
-  border-radius: 12px;
-  font-size: 13px;
-  line-height: 1.68;
-  background: var(--bg-soft);
+.turn.user .bubble {
+  max-width: 84%;
+  padding: 8px 12px;
+  border-radius: 12px 12px 4px 12px;
+  font-size: 12.5px;
+  line-height: 1.66;
+  background: var(--accent-soft);
+  color: var(--on-accent-soft);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.msg.user .bubble {
-  background: var(--accent-soft);
-  color: var(--on-accent-soft);
+.turn.user .bubble.pending {
+  opacity: 0.66;
 }
 
-.msg .bubble.pending {
-  opacity: 0.68;
+.turn-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
-.msg.error .bubble {
+.turn-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.turn-name {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+.turn-sub {
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turn-clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-model {
+  font-size: 10.5px;
+  color: var(--muted);
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--bg-soft);
+}
+
+.turn-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.turn-text {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.turn-text.is-error {
+  padding: 7px 10px;
+  border-radius: 8px;
   background: var(--bubble-error-bg);
   color: var(--bubble-error-ink);
 }
 
-.plan-card .ant-card-head {
-  min-height: 0;
-  padding: 8px 12px;
+.turn-text-icon {
+  color: var(--danger);
+  margin-top: 4px;
+  flex: none;
 }
 
-.plan-card .ant-card-body {
-  padding: 10px 12px;
-}
-
-.plan-card .plan-steps {
-  margin: 8px 0;
-  padding-left: 18px;
-  font-size: 12.5px;
+.turn-notice {
+  margin: 0;
+  font-size: 11.5px;
   line-height: 1.7;
-  color: var(--ink-soft);
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--bg-soft);
 }
 
-.plan-card > .ant-card-body > .ant-typography {
-  display: block;
+/* ---------------------------- 对话：执行时间线 ---------------------------- */
+
+.run-timeline {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.file-stream {
-  width: 100%;
+/* 贯穿整轮的竖线：让"这些步骤属于同一次运行"可见，而不是一串独立卡片 */
+.run-timeline::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 8px;
+  bottom: 8px;
+  width: 1.5px;
+  border-radius: 1px;
+  background: var(--line);
 }
 
-.file-line {
-  font-size: 12px;
+.run-step {
+  position: relative;
   padding: 2px 0;
+  min-width: 0;
 }
 
-.file-line.active {
+.run-bullet {
+  position: absolute;
+  left: -25px;
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 8.5px;
+  z-index: 1;
+}
+
+.run-step.is-running .run-bullet {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: bullet-pulse 1.8s ease-in-out infinite;
+}
+
+.run-step.is-done .run-bullet {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--ok) 13%, var(--surface));
+  color: var(--ok);
+}
+
+.run-step.is-failed .run-bullet {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--danger) 13%, var(--surface));
+  color: var(--danger);
+}
+
+.run-hollow {
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.run-step.is-running .run-hollow {
+  background: var(--accent);
+}
+
+.run-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.run-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.run-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.run-step.is-idle .run-title {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.run-meta {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.run-meta .has-warn {
+  color: var(--warn);
+}
+
+.run-notice-text {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: normal;
+  line-height: 1.65;
+}
+
+.run-notice-text.warn {
+  color: var(--warn);
+}
+
+.run-warn-text {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: normal;
+}
+
+/* 文件写入：每个文件一行，正在写的那个额外露出一段实时代码 */
+.run-files {
+  list-style: none;
+  margin: 2px 0 2px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.run-file {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 4px 8px 5px;
+  min-width: 0;
+}
+
+.run-file.is-active {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+
+.run-file-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11.5px;
+}
+
+.run-file-icon {
+  color: var(--muted);
+  flex: none;
+  font-size: 11px;
+}
+
+.run-file-icon.active {
   color: var(--accent);
 }
 
-.stage-pill {
-  color: var(--muted);
+.run-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-soft);
+  font-size: 11.5px;
 }
 
-.run-notice {
+.run-file-meta,
+.run-file-time {
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-file-time {
+  margin-left: 2px;
+}
+
+.code-peek {
+  margin: 5px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: color-mix(in srgb, var(--code-ink) 58%, transparent);
+  font-size: 10.5px;
+  line-height: 1.5;
+  max-height: 72px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  border-radius: 6px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 34%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 34%);
+}
+
+.code-peek-line {
   display: block;
-  margin: 0;
-  font-size: 12px;
-  color: var(--muted);
-  background: var(--bg-soft);
-  border-radius: 8px;
-  padding: 6px 10px;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.run-notice.warn {
-  color: var(--warn);
-  background: var(--notice-warn-bg);
+.caret {
+  display: inline-block;
+  width: 5px;
+  height: 11px;
+  margin-left: 1px;
+  vertical-align: -1px;
+  background: var(--accent);
+  animation: caret-blink 1.05s steps(1) infinite;
+}
+
+/* ------------------------------ 深度思考 -------------------------------- */
+
+.thought {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-soft);
+  overflow: hidden;
+}
+
+.thought-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 9px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.thought-head:hover {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.thought-caret {
+  font-size: 8px;
+  color: var(--muted);
+  flex: none;
+}
+
+.thought-label {
+  font-weight: 600;
+  flex: none;
+}
+
+.thought-name {
+  color: var(--muted);
+  flex: none;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thought-preview {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thought-live {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--accent);
+  flex: none;
+}
+
+.thought-body {
+  padding: 0 10px 9px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.thought-summary {
+  margin: 0 0 6px;
+  line-height: 1.7;
+}
+
+.thought-steps {
+  margin: 0 0 6px;
+  padding-left: 16px;
+  font-size: 11.5px;
+  line-height: 1.75;
+}
+
+.thought-stream {
+  max-height: 132px;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 1.72;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.thought-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.thought-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.thought-stack {
+  font-size: 10px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.file-chip {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.75;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.changed-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.changed-more {
+  font-size: 10px;
+  color: var(--muted);
+  align-self: center;
+}
+
+.run-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.run-metric.model {
+  color: var(--ink-soft);
+}
+
+.live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 15%, transparent);
+  animation: live-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.42;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes bullet-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
 }
 
 .check-list {
-  gap: 6px;
+  gap: 5px;
 }
 
 .error-banner {
@@ -874,6 +1628,52 @@ pre {
   overflow-wrap: anywhere;
 }
 
+/* 模型名是这一块里的第二主角：字号比通道名小一档，但比说明文字显眼得多 */
+.model-current-model {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 1px 0 2px;
+}
+
+.model-name {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 7px;
+  overflow-wrap: anywhere;
+}
+
+.model-copy {
+  color: var(--muted);
+  height: 22px;
+}
+
+.model-pill {
+  display: inline-block;
+  max-width: 100%;
+  font-size: 10.5px;
+  line-height: 1.75;
+  color: var(--ink-soft);
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-custom-input {
+  width: 220px;
+  max-width: 100%;
+  font-size: 11.5px;
+}
+
 .model-current-reason {
   font-size: 11.5px;
   color: var(--muted);
@@ -978,10 +1778,16 @@ pre {
 }
 
 .model-row-sub {
-  font-family: var(--mono);
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.model-row-count {
+  font-size: 10.5px;
   color: var(--muted);
-  overflow-wrap: anywhere;
 }
 
 .model-row-note {

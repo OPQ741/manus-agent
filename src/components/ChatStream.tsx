@@ -1,16 +1,49 @@
-import { useEffect, useRef } from 'react'
-import { Card, Flex, Space, Spin, Typography } from 'antd'
-import { CheckCircleFilled, ExclamationCircleFilled, FileTextOutlined, LoadingOutlined } from '@ant-design/icons'
-import type { Check, Message, Plan } from '../../shared/types'
-import { Badge } from './ui'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Flex, Tooltip, Typography } from 'antd'
+import {
+  CheckCircleFilled,
+  CheckOutlined,
+  ClockCircleOutlined,
+  CloseOutlined,
+  DownOutlined,
+  ExclamationCircleFilled,
+  FileTextOutlined,
+  LoadingOutlined,
+  RightOutlined,
+  ThunderboltOutlined,
+  WarningOutlined,
+} from '@ant-design/icons'
+import type { Check, Message, Plan, ProviderInfo, Usage } from '../../shared/types'
+import { AgentAvatar, Badge, type AgentRole } from './ui'
 
 const { Text } = Typography
+
+/**
+ * 对话流 = 一次运行的执行记录，而不是"一问一答两团气泡"。
+ *
+ * 参照 CLI Agent（Claude Code / Codex / Cursor）的转录形态：
+ *
+ *   你 ── 需求
+ *   Agent ── ├ 拆解需求            ✓ 0.3s
+ *            ├ 深度思考  ⌄（可展开的模型自述）
+ *            ├ 编写代码
+ *            │   ├ app.js      132 行 · 4.2s ← 正在写入，尾部代码实时滚动
+ *            │   └ index.html  148 行 · 3.1s ✓
+ *            └ 静态自检      ✓ 6 通过 · 1 提示
+ *
+ * 为什么不是"聊天气泡"：生成过程的真实信息密度在**步骤**上（谁在做什么、
+ * 花了多久、写到第几行、哪一项校验没过），而气泡把这一切压成一段散文，
+ * 用户只能读完之后才知道刚才发生了什么。
+ */
 
 export interface LiveFile {
   path: string
   content: string
   lines: number
   done: boolean
+  /** 开始/结束时刻：用来算"这个文件写了多久"，而不是整轮的平均值 */
+  startedAt: number
+  endedAt?: number
 }
 
 export interface LiveState {
@@ -20,9 +53,15 @@ export interface LiveState {
   files: LiveFile[]
   checks: Check[]
   warnings: string[]
+  /** 模型自述的最新一段（口播），拼进"深度思考" */
   note: string
+  /** note 的累积版本：模型边想边说的话，逐字追加 */
+  thought: string
   /** 服务端的过程性提示：排队等免 Key 配额、换了一家模型重试… */
   notice: { level: 'info' | 'warn'; text: string } | null
+  startedAt: number
+  usage: Usage | null
+  provider: ProviderInfo | null
 }
 
 export const EMPTY_LIVE: LiveState = {
@@ -33,10 +72,37 @@ export const EMPTY_LIVE: LiveState = {
   checks: [],
   warnings: [],
   note: '',
+  thought: '',
   notice: null,
+  startedAt: 0,
+  usage: null,
+  provider: null,
 }
 
 const STAGE_LABEL: Record<string, string> = { plan: '拆解需求', write: '编写代码', verify: '静态自检' }
+
+function fmtSec(ms: number): string {
+  const s = Math.max(0, ms) / 1000
+  if (s < 10) return `${s.toFixed(1)}s`
+  if (s < 60) return `${Math.round(s)}s`
+  return `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, '0')}s`
+}
+
+function fmtChars(chars: number): string {
+  if (chars >= 1000) return `${(chars / 1000).toFixed(1)}k 字符`
+  return `${chars} 字符`
+}
+
+/** 运行中的秒表：只在 running 时开 timer，停下就别再让 React 每秒空转。 */
+function useTicker(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    const id = window.setInterval(() => setNow(Date.now()), 200)
+    return () => window.clearInterval(id)
+  }, [active])
+  return now
+}
 
 function readPlan(meta: Record<string, unknown> | undefined): Plan | null {
   const plan = meta?.plan
@@ -44,162 +110,464 @@ function readPlan(meta: Record<string, unknown> | undefined): Plan | null {
   return null
 }
 
+function readUsage(meta: Record<string, unknown> | undefined): Usage | null {
+  const usage = meta?.usage
+  if (usage && typeof usage === 'object' && typeof (usage as Usage).ms === 'number') return usage as Usage
+  return null
+}
+
+function readProvider(meta: Record<string, unknown> | undefined): ProviderInfo | null {
+  const provider = meta?.provider
+  if (provider && typeof provider === 'object' && typeof (provider as ProviderInfo).id === 'string') {
+    return provider as ProviderInfo
+  }
+  return null
+}
+
+/* --------------------------------- 基础件 -------------------------------- */
+
+type RowStatus = 'pending' | 'running' | 'done' | 'failed' | 'idle'
+
+function RunStep({
+  status,
+  title,
+  meta,
+  children,
+  last,
+}: {
+  status: RowStatus
+  title: React.ReactNode
+  meta?: React.ReactNode
+  children?: React.ReactNode
+  last?: boolean
+}) {
+  return (
+    <li className={`run-step is-${status}${last ? ' is-last' : ''}`}>
+      <span className="run-bullet" aria-hidden="true">
+        {status === 'running' ? (
+          <LoadingOutlined spin />
+        ) : status === 'done' ? (
+          <CheckOutlined />
+        ) : status === 'failed' ? (
+          <CloseOutlined />
+        ) : (
+          <span className="run-hollow" />
+        )}
+      </span>
+      <div className="run-main">
+        <div className="run-line">
+          <span className="run-title">{title}</span>
+          {meta ? <span className="run-meta">{meta}</span> : null}
+        </div>
+        {children}
+      </div>
+    </li>
+  )
+}
+
 /** 自检结果统一渲染成一组语义标签，对话流与预览工具栏复用同一种表达。 */
 export function CheckTags({ checks }: { checks: Check[] }) {
   return (
-    <Flex wrap gap={6} className="check-list">
+    <Flex wrap gap={5} className="check-list">
       {checks.map((check) => (
-        <Badge
-          key={check.id}
-          tone={check.ok ? 'ok' : check.level === 'block' ? 'danger' : 'warn'}
-          title={check.detail}
-        >
-          <Space size={4}>
-            {check.ok ? <CheckCircleFilled /> : <ExclamationCircleFilled />}
-            {check.label}
-          </Space>
+        <Badge key={check.id} tone={check.ok ? 'ok' : check.level === 'block' ? 'danger' : 'warn'} title={check.detail}>
+          {check.ok ? <CheckCircleFilled /> : <ExclamationCircleFilled />} {check.label}
         </Badge>
       ))}
     </Flex>
   )
 }
 
-export function PlanCard({ plan }: { plan: Plan }) {
+/**
+ * 深度思考。
+ *
+ * 前半段是模型自己说的话（`<note>` 流），后半段是它给出的方案 JSON ——
+ * 两者本就是同一次思考的两面，分成两个卡片反而要用户自己拼。
+ */
+function Thinking({
+  text,
+  plan,
+  streaming,
+  defaultOpen = false,
+}: {
+  text: string
+  plan: Plan | null
+  streaming?: boolean
+  defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  const hasText = Boolean(text.trim())
+  const steps = plan?.steps ?? []
+  const summary = plan?.summary ?? ''
+  if (!hasText && !plan) return null
+
+  const preview = (hasText ? text : summary).trim().replace(/\s+/g, ' ').slice(0, 68)
+
   return (
-    <Card
-      size="small"
-      className="plan-card"
-      title={
-        <Space size={8}>
-          <Badge tone="accent">方案</Badge>
-          <Text strong>{plan.name}</Text>
-        </Space>
-      }
-    >
-      {plan.summary ? (
-        <Text type="secondary" style={{ fontSize: 12.5 }}>
-          {plan.summary}
-        </Text>
-      ) : null}
-      {plan.steps.length > 0 ? (
-        <ol className="plan-steps">
-          {plan.steps.map((step, index) => (
-            <li key={index}>{step}</li>
-          ))}
-        </ol>
-      ) : null}
-      {plan.files.length > 0 ? (
-        <Flex wrap gap={5}>
-          {plan.files.map((file) => (
-            <Badge key={file.path}>{file.path}</Badge>
-          ))}
-        </Flex>
-      ) : null}
-      <Text type="secondary" className="mono" style={{ fontSize: 11.5 }}>
-        {plan.stack}
-      </Text>
-    </Card>
-  )
-}
+    <div className={`thought${open ? ' is-open' : ''}`}>
+      <button type="button" className="thought-head" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+        <span className="thought-caret">{open ? <DownOutlined /> : <RightOutlined />}</span>
+        <span className="thought-label">深度思考</span>
+        {plan ? <span className="thought-name">{plan.name}</span> : null}
+        {!open && preview ? <span className="thought-preview">{preview}…</span> : null}
+        {streaming ? (
+          <span className="thought-live">
+            <span className="live-dot" />
+            思考中
+          </span>
+        ) : null}
+      </button>
 
-function LiveBlock({ live }: { live: LiveState }) {
-  return (
-    <div className="msg agent">
-      <span className="who">Nucleus Agent</span>
-      {live.stage ? (
-        <Space size={6} className="stage-pill">
-          <Spin indicator={<LoadingOutlined spin />} size="small" />
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            正在{STAGE_LABEL[live.stage] ?? live.stage}
-          </Text>
-        </Space>
-      ) : null}
-
-      {live.plan ? <PlanCard plan={live.plan} /> : null}
-
-      {live.files.length > 0 ? (
-        <Space direction="vertical" size={4} className="file-stream">
-          {live.files.map((file) => (
-            <Flex key={file.path} align="center" gap={7} className={`file-line${file.done ? '' : ' active'}`}>
-              {file.done ? (
-                <CheckCircleFilled style={{ color: 'var(--ok)' }} />
-              ) : (
-                <Spin indicator={<LoadingOutlined spin />} size="small" />
-              )}
-              <FileTextOutlined style={{ opacity: 0.5 }} />
-              <Text className="mono" style={{ fontSize: 12 }}>
-                {file.path}
-              </Text>
-              <Text type="secondary" style={{ fontSize: 11.5 }}>
-                {file.done ? `${file.lines} 行` : '写入中…'}
-              </Text>
-            </Flex>
-          ))}
-        </Space>
-      ) : null}
-
-      {live.notice ? (
-        <Text className={`run-notice ${live.notice.level}`} role="status">
-          {live.notice.text}
-        </Text>
-      ) : null}
-      {live.note ? (
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          {live.note}
-        </Text>
-      ) : null}
-      {live.checks.length > 0 ? <CheckTags checks={live.checks} /> : null}
-      {live.warnings.length > 0 ? (
-        <Text type="secondary" style={{ fontSize: 11.5 }}>
-          {live.warnings.length} 条解析提示：{live.warnings[0]}
-        </Text>
+      {open ? (
+        <div className="thought-body">
+          {plan?.summary ? <p className="thought-summary">{plan.summary}</p> : null}
+          {steps.length > 0 ? (
+            <ol className="thought-steps">
+              {steps.map((step, index) => (
+                <li key={index}>{step}</li>
+              ))}
+            </ol>
+          ) : null}
+          {hasText ? (
+            <div className="thought-stream">
+              {text}
+              {streaming ? <span className="caret" /> : null}
+            </div>
+          ) : null}
+          <div className="thought-foot">
+            {plan?.files?.length ? (
+              <span className="thought-files">
+                {plan.files.map((file) => (
+                  <Tooltip key={file.path} title={file.purpose || file.path}>
+                    <span className="file-chip mono">{file.path}</span>
+                  </Tooltip>
+                ))}
+              </span>
+            ) : null}
+            {plan?.stack ? <span className="mono thought-stack">{plan.stack}</span> : null}
+          </div>
+        </div>
       ) : null}
     </div>
   )
 }
+
+/** 正在写入的文件的尾部预览：让"模型在打字"这件事可见，而不是一个转圈。 */
+function CodePeek({ content }: { content: string }) {
+  const tail = useMemo(() => {
+    const slice = content.slice(-360)
+    const lines = slice.split('\n')
+    // 切在半个字符上会看到残行，丢掉第一行
+    if (slice.length === 360) lines.shift()
+    return lines.slice(-4)
+  }, [content])
+  return (
+    <pre className="code-peek mono" aria-hidden="true">
+      {tail.map((line, index) => (
+        <span key={index} className="code-peek-line">
+          {line || ' '}
+        </span>
+      ))}
+      <span className="caret" />
+    </pre>
+  )
+}
+
+function FileRow({ file, now }: { file: LiveFile; now: number }) {
+  const elapsed = Math.max(0, (file.endedAt ?? now) - (file.startedAt || now))
+  return (
+    <li className={`run-file${file.done ? '' : ' is-active'}`}>
+      <div className="run-file-head">
+        <span className={`run-file-icon${file.done ? '' : ' active'}`}>
+          {file.done ? <FileTextOutlined /> : <LoadingOutlined spin />}
+        </span>
+        <span className="run-file-path mono">{file.path}</span>
+        <span className="run-file-meta">{file.done ? `${file.lines} 行` : `${file.lines} 行 · 写入中`}</span>
+        <span className="run-file-time">{fmtSec(elapsed)}</span>
+      </div>
+      {!file.done && file.content ? <CodePeek content={file.content} /> : null}
+    </li>
+  )
+}
+
+function Metrics({ usage, provider, version }: { usage: Usage | null; provider: ProviderInfo | null; version?: number }) {
+  if (!usage && !provider) return null
+  return (
+    <div className="run-metrics">
+      {version ? <span className="run-metric">v{version}</span> : null}
+      {usage ? (
+        <span className="run-metric">
+          <ClockCircleOutlined /> {fmtSec(usage.ms)}
+        </span>
+      ) : null}
+      {usage?.chars ? <span className="run-metric">{fmtChars(usage.chars)}</span> : null}
+      {usage?.tokens ? <span className="run-metric">{usage.tokens} tokens</span> : null}
+      {provider ? (
+        <span className="run-metric model" title={`${provider.label} · ${provider.model}`}>
+          <ThunderboltOutlined /> <span className="mono">{provider.model}</span>
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+/* --------------------------------- 进行中 -------------------------------- */
+
+function LiveBlock({ live }: { live: LiveState }) {
+  const now = useTicker(live.running)
+  const elapsed = live.startedAt ? now - live.startedAt : 0
+
+  /** 各阶段的起止：时间线上每一步都应该能说出"花了多久" */
+  const marksRef = useRef<Record<string, { from: number; to?: number }>>({})
+  const prevStage = useRef<string | null>(null)
+  const [, force] = useState(0)
+  useEffect(() => {
+    const at = Date.now()
+    const prev = prevStage.current
+    if (prev && prev !== live.stage) {
+      const mark = marksRef.current[prev]
+      if (mark && !mark.to) mark.to = at
+    }
+    if (live.stage && !marksRef.current[live.stage]) marksRef.current[live.stage] = { from: at }
+    prevStage.current = live.stage
+    force((value) => value + 1)
+  }, [live.stage])
+
+  const marks = marksRef.current
+  const planDone = Boolean(live.plan) || Boolean(marks.plan?.to)
+  const writeRunning = live.stage === 'write'
+  const verifyStarted = live.stage === 'verify' || live.checks.length > 0
+  const okCount = live.checks.filter((check) => check.ok).length
+  const badCount = live.checks.length - okCount
+
+  return (
+    <article className="turn agent is-live">
+      <header className="turn-head">
+        <AgentAvatar role="agent" size={26} />
+        <div className="turn-who">
+          <span className="turn-name">Nucleus Agent</span>
+          <span className="turn-sub">
+            {live.provider ? live.provider.label : '规划 · 编码 · 自检'}
+          </span>
+        </div>
+        <div className="spacer" />
+        <span className="turn-clock">
+          <span className="live-dot" />
+          {fmtSec(elapsed)}
+        </span>
+      </header>
+
+      <div className="turn-body">
+        <ol className="run-timeline">
+          <RunStep
+            status={planDone ? 'done' : live.stage === 'plan' ? 'running' : 'idle'}
+            title={STAGE_LABEL.plan}
+            meta={
+              planDone && marks.plan ? fmtSec((marks.plan.to ?? Date.now()) - marks.plan.from) : live.stage === 'plan' ? '…' : null
+            }
+          />
+
+          {live.thought || live.plan ? (
+            <li className="run-step is-plain">
+              <span className="run-bullet is-soft" aria-hidden="true">
+                <span className="run-hollow" />
+              </span>
+              <div className="run-main">
+                <Thinking
+                  text={live.thought}
+                  plan={live.plan}
+                  streaming={live.running && !live.files.length}
+                  defaultOpen={!live.plan}
+                />
+              </div>
+            </li>
+          ) : null}
+
+          <RunStep
+            status={live.files.length === 0 && writeRunning ? 'running' : writeRunning ? 'running' : live.files.length ? 'done' : 'idle'}
+            title={STAGE_LABEL.write}
+            meta={
+              live.files.length
+                ? `${live.files.filter((file) => file.done).length}/${live.files.length} 个文件`
+                : writeRunning
+                  ? '等待首个文件…'
+                  : null
+            }
+          >
+            {live.files.length > 0 ? (
+              <ul className="run-files">
+                {live.files.map((file) => (
+                  <FileRow key={file.path} file={file} now={now} />
+                ))}
+              </ul>
+            ) : null}
+          </RunStep>
+
+          {verifyStarted ? (
+            <RunStep
+              status={live.stage === 'verify' ? 'running' : live.checks.length ? (badCount > 0 ? 'done' : 'done') : 'idle'}
+              title={STAGE_LABEL.verify}
+              meta={
+                live.checks.length ? (
+                  <span className={badCount > 0 ? 'has-warn' : ''}>
+                    {okCount} 通过{badCount > 0 ? ` · ${badCount} 提示` : ''}
+                  </span>
+                ) : (
+                  '…'
+                )
+              }
+            >
+              {live.checks.length ? <CheckTags checks={live.checks} /> : null}
+            </RunStep>
+          ) : null}
+
+          {live.notice ? (
+            <RunStep
+              status="idle"
+              title={<span className={`run-notice-text ${live.notice.level}`}>{live.notice.text}</span>}
+              last
+            />
+          ) : null}
+
+          {live.warnings.length > 0 ? (
+            <RunStep
+              status="idle"
+              title={<span className="run-warn-text">解析提示：{live.warnings[0]}</span>}
+              meta={live.warnings.length > 1 ? `共 ${live.warnings.length} 条` : null}
+              last
+            />
+          ) : null}
+        </ol>
+      </div>
+    </article>
+  )
+}
+
+/* --------------------------------- 历史消息 ------------------------------ */
+
+const KIND_ROLE: Record<string, AgentRole> = { text: 'agent', plan: 'planner', error: 'runtime', notice: 'model' }
 
 function AgentMessage({ message }: { message: Message }) {
   const plan = readPlan(message.meta)
+  const usage = readUsage(message.meta)
+  const provider = readProvider(message.meta)
   const checks = message.meta?.checks
+  const changed = message.meta?.changed
+  const version = typeof message.meta?.version === 'number' ? (message.meta.version as number) : undefined
+  const role = message.kind === 'error' ? 'runtime' : plan ? 'planner' : 'agent'
+
+  if (message.kind === 'notice' && !plan) {
+    return (
+      <article className="turn agent is-notice">
+        <header className="turn-head">
+          <AgentAvatar role={KIND_ROLE[message.kind] ?? 'agent'} size={22} />
+          <div className="turn-who">
+            <span className="turn-name">{KIND_ROLE[message.kind] === 'model' ? '出处' : 'Nucleus Agent'}</span>
+          </div>
+        </header>
+        <p className="turn-notice">{message.content}</p>
+      </article>
+    )
+  }
+
   return (
-    <div className={`msg agent${message.kind === 'error' ? ' error' : ''}`}>
-      <span className="who">{message.kind === 'error' ? '运行时' : 'Nucleus Agent'}</span>
-      {plan ? <PlanCard plan={plan} /> : null}
-      <div className="bubble">{message.content}</div>
-      {Array.isArray(checks) && checks.length > 0 ? <CheckTags checks={checks as Check[]} /> : null}
-    </div>
+    <article className={`turn agent${message.kind === 'error' ? ' is-error' : ''}`}>
+      <header className="turn-head">
+        <AgentAvatar role={role} size={26} />
+        <div className="turn-who">
+          <span className="turn-name">{message.kind === 'error' ? '运行时' : 'Nucleus Agent'}</span>
+          {plan ? <span className="turn-sub">方案 · 编码 · 自检</span> : null}
+        </div>
+        <div className="spacer" />
+        {provider ? (
+          <Tooltip title={`${provider.label} · ${provider.model}`}>
+            <span className="turn-model mono">{provider.model}</span>
+          </Tooltip>
+        ) : null}
+      </header>
+
+      <div className="turn-body">
+        {plan ? (
+          <Thinking text="" plan={plan} defaultOpen={false} />
+        ) : null}
+
+        <div className={`turn-text${message.kind === 'error' ? ' is-error' : ''}`}>
+          {message.kind === 'error' ? <WarningOutlined className="turn-text-icon" /> : null}
+          <span>{message.content}</span>
+        </div>
+
+        {Array.isArray(changed) && changed.length > 0 ? (
+          <div className="changed-files">
+            {changed.slice(0, 8).map((path) => (
+              <span key={String(path)} className="file-chip mono">
+                {String(path)}
+              </span>
+            ))}
+            {changed.length > 8 ? <span className="changed-more">+{changed.length - 8}</span> : null}
+          </div>
+        ) : null}
+
+        {Array.isArray(checks) && checks.length > 0 ? <CheckTags checks={checks as Check[]} /> : null}
+
+        <Metrics usage={usage} provider={provider} version={version} />
+      </div>
+    </article>
   )
 }
 
-export function ChatStream({ messages, live, pendingUser }: { messages: Message[]; live: LiveState; pendingUser: string | null }) {
-  const endRef = useRef<HTMLDivElement>(null)
+/* --------------------------------- 出口 --------------------------------- */
 
+export function ChatStream({
+  messages,
+  live,
+  pendingUser,
+}: {
+  messages: Message[]
+  live: LiveState
+  pendingUser: string | null
+}) {
+  const endRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * 自动跟随：只钉住底部，不跟用户抢滚动条。
+   *
+   * 判据是"距离底部是否小于 120px"：用户主动往上翻看历史时，
+   * 每秒十几次的 file_delta 不该把他拽回底部 —— 这是流式界面最常见的坏体验。
+   */
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end' })
-  }, [messages.length, live.files.length, live.stage, pendingUser])
+    const box = scrollRef.current
+    if (!box) return
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120
+    if (nearBottom) endRef.current?.scrollIntoView({ block: 'end' })
+  }, [messages.length, live.files.length, live.thought.length, live.stage, pendingUser])
 
   return (
-    <div className="chat-scroll">
+    <div className="chat-scroll" ref={scrollRef}>
       {messages.length === 0 && !pendingUser ? (
-        <Text type="secondary" style={{ fontSize: 12.5 }}>
-          描述你想要的应用，Agent 会先给方案再动手。
-        </Text>
+        <div className="chat-empty">
+          <Text type="secondary" style={{ fontSize: 12.5 }}>
+            描述你想要的应用，Agent 会先给方案再动手 —— 每一步都会实时显示在这里。
+          </Text>
+        </div>
       ) : null}
 
       {messages.map((message) =>
         message.role === 'user' ? (
-          <div key={message.id} className="msg user">
+          <article key={message.id} className="turn user">
             <div className="bubble">{message.content}</div>
-          </div>
+            <AgentAvatar role="user" size={24} />
+          </article>
         ) : (
           <AgentMessage key={message.id} message={message} />
         ),
       )}
 
       {pendingUser ? (
-        <div className="msg user">
+        <article className="turn user">
           <div className="bubble pending">{pendingUser}</div>
-        </div>
+          <AgentAvatar role="user" size={24} />
+        </article>
       ) : null}
 
       {live.running || live.files.length > 0 ? <LiveBlock live={live} /> : null}

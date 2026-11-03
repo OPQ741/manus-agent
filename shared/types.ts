@@ -125,6 +125,13 @@ export interface Project {
   provider: ProviderId
   /** 展示名（"免 Key · GPT-OSS 20B"），落库时定死，避免目录变更后历史标签漂移 */
   providerLabel: string
+  /**
+   * 最近一次成功生成用的**模型名**（"deepseek-chat"）。
+   *
+   * 只靠 providerLabel 不够：同一家通道能换模型，而"这次到底跑的哪个模型"
+   * 是排查质量差异时最常被追问的一句。老项目没有这个字段，界面按通道默认值回退。
+   */
+  providerModel?: string
   design: DesignPrefs
   /** 设计微调（叠加在生成结果之上，不进入版本快照） */
   tweak?: DesignTweak
@@ -217,6 +224,7 @@ export interface ProjectSummary {
   fileCount: number
   provider: ProviderId
   providerLabel: string
+  providerModel?: string
   /** 创建者的访客标识：用于在列表里标出「我创建的」，不是安全边界。 */
   createdBy: string
   createdAt: number
@@ -239,6 +247,13 @@ export interface GenerateRequest {
   prompt: string
   /** 点名用哪个提供方；缺省交给服务端解析链 */
   provider?: ProviderId
+  /**
+   * 这一次生成临时换的模型名（不改全局设置）。
+   *
+   * 同一家通道的可选模型差别很大（reasoner 慢但稳、flash 快但容易截断），
+   * 而"为了试一个模型去设置页改全局"会让下一个项目也跟着变 —— 所以按次指定。
+   */
+  model?: string
 }
 
 export const PROMPT_MAX_LENGTH = 2000

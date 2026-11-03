@@ -57,6 +57,7 @@ export async function seedDatabase(store: Store): Promise<number> {
     createdBy: 'nucleus',
     provider: example.provider.id,
     providerLabel: example.provider.label,
+    providerModel: example.provider.model,
   })
 
   await store.appendMessage({ projectId: project.id, role: 'user', kind: 'text', content: example.prompt })

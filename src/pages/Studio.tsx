@@ -5,6 +5,7 @@ import {
   ArrowLeftOutlined,
   CodeOutlined,
   DownloadOutlined,
+  EditOutlined,
   EyeOutlined,
   HistoryOutlined,
   LoadingOutlined,
@@ -12,15 +13,18 @@ import {
   ShareAltOutlined,
   StopOutlined,
 } from '@ant-design/icons'
-import type { AgentEvent, DesignTweak, ProjectDetail, PublicSettings } from '../../shared/types'
+import type { AgentEvent, DesignTweak, Project, ProjectDetail, PublicSettings } from '../../shared/types'
 import { ChatStream, EMPTY_LIVE, type LiveState } from '../components/ChatStream'
 import { CodePanel } from '../components/CodePanel'
+import { ModelMenu } from '../components/ModelMenu'
 import { PreviewPanel } from '../components/PreviewPanel'
+import { ProjectSettingsModal } from '../components/ProjectSettingsModal'
 import { TopBar } from '../components/TopBar'
 import { VersionPanel } from '../components/VersionPanel'
 import { Badge, toast } from '../components/ui'
 import { ApiError, api, generate } from '../lib/api'
 import { explainError } from '../lib/errors'
+import { readModelChoice, writeModelChoice, type ModelChoice } from '../lib/model-prefs'
 import { applyStorageMessage } from '../lib/seed'
 import { shareUrlFor } from '../lib/share'
 import { takePendingPrompt } from '../lib/pending'
@@ -39,7 +43,12 @@ const STAGE_TEXT: Record<string, string> = { write: '正在写代码', verify: '
  */
 function applyEvents(state: LiveState, events: AgentEvent[]): LiveState {
   let next = state
-  const clone = () => ({ ...next, files: next.files.map((file) => ({ ...file })), checks: [...next.checks], warnings: [...next.warnings] })
+  const clone = () => ({
+    ...next,
+    files: next.files.map((file) => ({ ...file })),
+    checks: [...next.checks],
+    warnings: [...next.warnings],
+  })
 
   for (const event of events) {
     switch (event.type) {
@@ -52,8 +61,10 @@ function applyEvents(state: LiveState, events: AgentEvent[]): LiveState {
         next.plan = event.plan
         break
       case 'note':
+        // 累积而不是覆盖：模型边写边说的那几句，拼起来才是"它怎么想的"
         next = clone()
         next.note = (event.text || '').slice(0, 160)
+        next.thought = `${next.thought}${event.text || ''}`.slice(-2400)
         break
       case 'notice':
         // 排队/换家这类提示只保留最新一条：它们描述的是"此刻在发生什么"
@@ -63,7 +74,7 @@ function applyEvents(state: LiveState, events: AgentEvent[]): LiveState {
       case 'file_start':
         next = clone()
         if (!next.files.some((file) => file.path === event.path)) {
-          next.files.push({ path: event.path, content: '', lines: 0, done: false })
+          next.files.push({ path: event.path, content: '', lines: 0, done: false, startedAt: Date.now() })
         }
         break
       case 'file_delta': {
@@ -82,8 +93,16 @@ function applyEvents(state: LiveState, events: AgentEvent[]): LiveState {
           file.content = event.content
           file.lines = event.lines
           file.done = true
+          file.endedAt = Date.now()
         } else {
-          next.files.push({ path: event.path, content: event.content, lines: event.lines, done: true })
+          next.files.push({
+            path: event.path,
+            content: event.content,
+            lines: event.lines,
+            done: true,
+            startedAt: Date.now(),
+            endedAt: Date.now(),
+          })
         }
         break
       }
@@ -94,6 +113,11 @@ function applyEvents(state: LiveState, events: AgentEvent[]): LiveState {
       case 'warning':
         next = clone()
         next.warnings.push(event.message)
+        break
+      case 'done':
+        next = clone()
+        next.usage = event.usage
+        next.provider = event.provider ?? next.provider
         break
       default:
         break
@@ -115,10 +139,18 @@ export function StudioPage({ id }: { id: string }) {
   const [runtimeErrors, setRuntimeErrors] = useState<string[]>([])
   const [settings, setSettings] = useState<PublicSettings | null>(null)
   const [rolling, setRolling] = useState(false)
+  /** 本项目的模型选择（null = 跟随设置） */
+  const [modelChoice, setModelChoice] = useState<ModelChoice | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
   const busyRef = useRef(false)
   const inputRef = useRef<TextAreaRef>(null)
+  /**
+   * 模型选择走 ref 而不是进 run 的依赖数组：run 变了，下面那个 [id, run] 的
+   * 加载 effect 会整页重载 —— 换个模型就把对话重新拉一遍，体验很怪。
+   */
+  const modelChoiceRef = useRef<ModelChoice | null>(null)
   /**
    * 最近一次失败所用的指令：错误条上的「重新生成」要用**它**重试，
    * 而不是输入框里此刻的内容（用户可能已经改了字，或者输入框是空的）。
@@ -151,7 +183,7 @@ export function StudioPage({ id }: { id: string }) {
       setRuntimeErrors([])
       setError(null)
       lastFailedPromptRef.current = text
-      setLive({ ...EMPTY_LIVE, running: true, stage: 'plan' })
+      setLive({ ...EMPTY_LIVE, running: true, stage: 'plan', startedAt: Date.now() })
       setTab('preview')
 
       const controller = new AbortController()
@@ -181,7 +213,14 @@ export function StudioPage({ id }: { id: string }) {
       }
 
       try {
-        await generate(id, text, undefined, enqueue, controller.signal)
+        const choice = modelChoiceRef.current
+        await generate(
+          id,
+          text,
+          { provider: choice?.provider, model: choice?.model },
+          enqueue,
+          controller.signal,
+        )
         if (frame) {
           cancelAnimationFrame(frame)
           frame = 0
@@ -338,16 +377,22 @@ export function StudioPage({ id }: { id: string }) {
     [id],
   )
 
-  const rename = async (name: string) => {
-    const next = name.trim()
-    if (!next || !detail || next === detail.project.name) return
-    try {
-      const { project } = await api.renameProject(id, next)
-      setDetail((prev) => (prev ? { ...prev, project } : prev))
-    } catch (err) {
-      toast(err instanceof Error ? err.message : '重命名失败')
-    }
-  }
+  /** 本项目的模型选择：只影响下一次生成，不动全局设置。 */
+  const pickModel = useCallback(
+    (choice: ModelChoice | null) => {
+      setModelChoice(choice)
+      modelChoiceRef.current = choice
+      writeModelChoice(id, choice)
+      if (choice) toast(`下一次生成用 ${choice.model || choice.provider}`)
+    },
+    [id],
+  )
+
+  useEffect(() => {
+    const saved = readModelChoice(id)
+    setModelChoice(saved)
+    modelChoiceRef.current = saved
+  }, [id])
 
   if (loading) {
     return (
@@ -398,23 +443,26 @@ export function StudioPage({ id }: { id: string }) {
     <>
       <TopBar
         left={
-          <Flex align="center" gap={8} style={{ minWidth: 0 }}>
+          <Flex align="center" gap={6} style={{ minWidth: 0 }}>
             <Tooltip title="返回首页">
               <Button type="text" size="small" href="#/" aria-label="返回首页" icon={<ArrowLeftOutlined />} />
             </Tooltip>
-            {/* 就地改名：antd 的可编辑文本自带输入态、Enter 提交、Esc 取消，省掉一整套本地状态机 */}
-            <Typography.Text
-              strong
-              style={{ maxWidth: 260 }}
-              ellipsis={{ tooltip: project.name }}
-              editable={{ tooltip: '点击重命名', onChange: (value) => void rename(value) }}
-            >
-              {project.name}
-            </Typography.Text>
-            <Badge tone="accent">v{project.version}</Badge>
-            <Tooltip title="这次生成用的模型通道">
-              <Badge>{project.providerLabel || settings?.active?.label || '模型生成'}</Badge>
+            <Tooltip title={project.name}>
+              <span className="project-title">{project.name}</span>
             </Tooltip>
+            {/* 名字/简介/分享链接都收进弹窗：顶栏只留一支笔，不再就地撑开输入框 */}
+            <Tooltip title="项目设置">
+              <Button
+                type="text"
+                size="small"
+                className="project-edit"
+                aria-label="项目设置"
+                icon={<EditOutlined />}
+                onClick={() => setEditOpen(true)}
+              />
+            </Tooltip>
+            <Badge tone="accent">v{project.version}</Badge>
+            <ModelMenu project={project} settings={settings} value={modelChoice} onChange={pickModel} />
           </Flex>
         }
         right={
@@ -592,6 +640,14 @@ export function StudioPage({ id }: { id: string }) {
           />
         </section>
       </div>
+
+      <ProjectSettingsModal
+        open={editOpen}
+        project={project}
+        shareUrl={shareUrl}
+        onClose={() => setEditOpen(false)}
+        onSaved={(next: Project) => setDetail((prev) => (prev ? { ...prev, project: next } : prev))}
+      />
     </>
   )
 }

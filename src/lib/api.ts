@@ -90,6 +90,12 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ name }),
     }),
+  /** 项目设置弹窗用：名称与简介一起提交（只传要改的键，没传的服务端保持不动）。 */
+  updateProject: (id: string, patch: { name?: string; summary?: string }) =>
+    request<{ project: Project; previewHtml: string }>(`/api/projects/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
   /**
    * 保存设计微调。
    *
@@ -159,14 +165,14 @@ export const api = {
 export async function generate(
   projectId: string,
   prompt: string,
-  provider: ProviderId | undefined,
+  choice: { provider?: ProviderId; model?: string } = {},
   onEvent: (event: AgentEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/generate`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-visitor': visitorId() },
-    body: JSON.stringify({ prompt, provider }),
+    body: JSON.stringify({ prompt, provider: choice.provider, model: choice.model }),
     signal,
   })
 
