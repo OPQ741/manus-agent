@@ -5,11 +5,10 @@ import {
   CheckCircleFilled,
   DesktopOutlined,
   ExclamationCircleFilled,
-  ExportOutlined,
+  ExpandAltOutlined,
   FileTextOutlined,
   MobileOutlined,
   ReloadOutlined,
-  ShareAltOutlined,
   TabletOutlined,
 } from '@ant-design/icons'
 import type { Check, DesignTweak } from '../../shared/types'
@@ -47,7 +46,6 @@ interface Props {
   onTweakSave: (next: DesignTweak | undefined) => Promise<void>
   onHeal: () => void
   onRefresh: () => void
-  shareUrl: string | null
 }
 
 /**
@@ -130,7 +128,6 @@ export function PreviewPanel({
   onTweakSave,
   onHeal,
   onRefresh,
-  shareUrl,
 }: Props) {
   const [device, setDevice] = useState<Device>('desktop')
   const [nonce, setNonce] = useState(0)
@@ -217,16 +214,6 @@ export function PreviewPanel({
     }
   }
 
-  const copyShare = async () => {
-    if (!shareUrl) return
-    try {
-      await navigator.clipboard.writeText(shareUrl)
-      toast('分享链接已复制')
-    } catch {
-      toast(shareUrl)
-    }
-  }
-
   return (
     <>
       {errors.length > 0 ? (
@@ -308,31 +295,28 @@ export function PreviewPanel({
             </Tooltip>
           ) : null}
 
-          <Tooltip title="重新加载预览">
-            <Button
-              size="small"
-              type="text"
-              aria-label="重新加载预览"
-              icon={<ReloadOutlined />}
-              onClick={() => {
-                setNonce((value) => value + 1)
-                onRefresh()
-              }}
-            />
-          </Tooltip>
-          <Tooltip title="在新窗口打开">
-            <Button size="small" type="text" aria-label="在新窗口打开" icon={<ExportOutlined />} onClick={openStandalone} />
-          </Tooltip>
-          <Tooltip title="复制分享链接">
-            <Button
-              size="small"
-              type="text"
-              aria-label="复制分享链接"
-              disabled={!shareUrl}
-              icon={<ShareAltOutlined />}
-              onClick={() => void copyShare()}
-            />
-          </Tooltip>
+          {/*
+            预览自己的两个动作：刷新 / 新窗口。
+            「分享」「导出」统一收在顶栏一处 —— 之前工具栏里也放了分享、新窗口又用了
+            和导出几乎一样的图标，同一屏出现两套"分享/导出"，点错是必然的。
+          */}
+          <div className="tool-cluster">
+            <Tooltip title="重新加载预览">
+              <Button
+                size="small"
+                type="text"
+                aria-label="重新加载预览"
+                icon={<ReloadOutlined />}
+                onClick={() => {
+                  setNonce((value) => value + 1)
+                  onRefresh()
+                }}
+              />
+            </Tooltip>
+            <Tooltip title="在新窗口打开预览">
+              <Button size="small" type="text" aria-label="在新窗口打开预览" icon={<ExpandAltOutlined />} onClick={openStandalone} />
+            </Tooltip>
+          </div>
         </Flex>
 
         {showTweak ? (

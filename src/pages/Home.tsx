@@ -256,24 +256,34 @@ export function HomePage() {
                   <Text type="secondary" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
                     {timeAgo(project.updatedAt)}
                   </Text>
-                  {/* 项目带着全部版本历史，删掉无法恢复：用二次确认换掉原来的「再点一次」状态机 */}
-                  <Popconfirm
-                    title="删除这个项目？"
-                    description="版本历史会一起删除，不可恢复。"
-                    okText="删除"
-                    cancelText="取消"
-                    okButtonProps={{ danger: true }}
-                    onConfirm={() => void remove(project.id)}
+                  {/*
+                    项目带着全部版本历史，删掉无法恢复：用二次确认换掉原来的「再点一次」状态机。
+                    确认框的浮层虽然画在 body 下，React 事件却仍沿着组件树冒泡 ——
+                    「取消」会被卡片接走变成"点进卡片"，「删除」则会打开一个刚被删掉（已不存在）的项目。
+                    所以在 Popconfirm 外套一层把事件挡在卡片之外的壳，确认框里的任何点击都不再触达卡片。
+                  */}
+                  <span
+                    className="card-actions"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
                   >
-                    <Button
-                      size="small"
-                      type="text"
-                      danger
-                      icon={<DeleteOutlined />}
-                      aria-label={`删除 ${project.name}`}
-                      onClick={(event) => event.stopPropagation()}
-                    />
-                  </Popconfirm>
+                    <Popconfirm
+                      title="删除这个项目？"
+                      description="版本历史会一起删除，不可恢复。"
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => void remove(project.id)}
+                    >
+                      <Button
+                        size="small"
+                        type="text"
+                        danger
+                        icon={<DeleteOutlined />}
+                        aria-label={`删除 ${project.name}`}
+                      />
+                    </Popconfirm>
+                  </span>
                 </Flex>
               </Card>
             ))}

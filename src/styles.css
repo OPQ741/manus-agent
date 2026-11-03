@@ -32,6 +32,8 @@
   --code-ink: #e6e4f0;
   --radius: 12px;
   --radius-lg: 18px;
+  /* 对话里所有"气泡"共用同一个圆角：用户气泡、深度思考卡、通知条不再各写一个值 */
+  --bubble-radius: 10px;
   --shadow: 0 1px 2px rgba(20, 20, 26, 0.04), 0 10px 30px rgba(20, 20, 26, 0.07);
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   color-scheme: light;
@@ -607,6 +609,13 @@ pre {
   padding-top: 10px;
 }
 
+/* 删除按钮 + 确认框的容器：只负责把事件挡在卡片之外，不参与视觉 */
+.card-actions {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
 .project-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow);
@@ -656,21 +665,25 @@ pre {
   min-width: 0;
 }
 
-/* 用户：靠右，头像在最右，气泡在左 —— 与下方 Agent 的左右分栏形成"谁在说"的稳定位置感 */
+/* 用户：整块靠右，头像在最右，气泡在头像左侧 —— 与下方 Agent 的左右分栏形成"谁在说"的稳定位置感 */
 .turn.user {
-  flex-direction: row-reverse;
+  flex-direction: row;
   align-items: flex-start;
-  justify-content: flex-start;
+  justify-content: flex-end;
   gap: 8px;
 }
 
+/*
+ * 气泡深浅由 --bubble-mix 控制（见 ChatStream 的 bubbleTone）：最新的一条最深，越旧越淡。
+ * 用主色和表面色混出来而不是写死色值，换主色 / 切深色主题时层次都还在。
+ */
 .turn.user .bubble {
   max-width: 84%;
   padding: 8px 12px;
-  border-radius: 12px 12px 4px 12px;
+  border-radius: var(--bubble-radius);
   font-size: 12.5px;
   line-height: 1.66;
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) var(--bubble-mix, 22%), var(--surface));
   color: var(--on-accent-soft);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -759,7 +772,7 @@ pre {
 
 .turn-text.is-error {
   padding: 7px 10px;
-  border-radius: 8px;
+  border-radius: var(--bubble-radius);
   background: var(--bubble-error-bg);
   color: var(--bubble-error-ink);
 }
@@ -776,7 +789,7 @@ pre {
   line-height: 1.7;
   color: var(--muted);
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: var(--bubble-radius);
   background: var(--bg-soft);
 }
 
@@ -1081,7 +1094,7 @@ pre {
 
 .thought {
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--bubble-radius);
   background: var(--bg-soft);
   overflow: hidden;
 }
@@ -1173,7 +1186,7 @@ pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   padding: 6px 8px;
-  border-radius: 7px;
+  border-radius: calc(var(--bubble-radius) - 3px);
   background: var(--surface);
   border: 1px solid var(--line);
 }
@@ -1592,6 +1605,17 @@ pre {
 
 .preview-toolbar .ant-btn {
   color: var(--ink-soft);
+}
+
+/* 预览自己的动作簇（刷新 / 新窗口）：和左边的"设计 / 自检"用一条细线分开，避免一排按钮糊成一片 */
+.tool-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  margin-left: 4px;
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
 }
 
 /*

@@ -617,6 +617,23 @@ function AgentMessage({ message }: { message: Message }) {
 
 /* --------------------------------- 出口 --------------------------------- */
 
+/**
+ * 用户气泡的深浅 = 离现在多远。
+ *
+ * 长篇迭代里每条用户消息都是同一块浅紫，往回翻时"这句是刚说的、那句是半小时前说的"
+ * 只能靠位置猜。这里用主色浓度做一条静默的时间轴：最新的一条最深，越旧越淡 ——
+ * 不额外加标签、不加分割线，视线上就能分出层次。
+ */
+const BUBBLE_MIX_MIN = 8
+const BUBBLE_MIX_MAX = 30
+/** 待发送气泡的占位 id：它永远是最新的一条 */
+const PENDING_TURN = '__pending'
+
+function bubbleTone(depth: number): React.CSSProperties {
+  const mix = BUBBLE_MIX_MIN + (BUBBLE_MIX_MAX - BUBBLE_MIX_MIN) * Math.min(1, Math.max(0, depth))
+  return { '--bubble-mix': `${mix.toFixed(1)}%` } as React.CSSProperties
+}
+
 export function ChatStream({
   messages,
   live,
@@ -628,6 +645,18 @@ export function ChatStream({
 }) {
   const endRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  /** 每条用户消息的"新近度"：1 = 最新，0 = 最早；只有一条时按最新处理 */
+  const toneByTurn = useMemo(() => {
+    const ids = messages.filter((message) => message.role === 'user').map((message) => message.id)
+    if (pendingUser) ids.push(PENDING_TURN)
+    const total = ids.length
+    const map = new Map<string, number>()
+    ids.forEach((id, index) => {
+      map.set(id, total <= 1 ? 1 : 1 - (total - 1 - index) / (total - 1))
+    })
+    return map
+  }, [messages, pendingUser])
 
   /**
    * 自动跟随：只钉住底部，不跟用户抢滚动条。
@@ -655,7 +684,9 @@ export function ChatStream({
       {messages.map((message) =>
         message.role === 'user' ? (
           <article key={message.id} className="turn user">
-            <div className="bubble">{message.content}</div>
+            <div className="bubble" style={bubbleTone(toneByTurn.get(message.id) ?? 0)}>
+              {message.content}
+            </div>
             <AgentAvatar role="user" size={24} />
           </article>
         ) : (
@@ -665,7 +696,9 @@ export function ChatStream({
 
       {pendingUser ? (
         <article className="turn user">
-          <div className="bubble pending">{pendingUser}</div>
+          <div className="bubble pending" style={bubbleTone(1)}>
+            {pendingUser}
+          </div>
           <AgentAvatar role="user" size={24} />
         </article>
       ) : null}

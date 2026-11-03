@@ -643,7 +643,6 @@ export function StudioPage({ id }: { id: string }) {
                     onTweakSave={saveTweak}
                     onHeal={heal}
                     onRefresh={() => void refresh()}
-                    shareUrl={shareUrl}
                   />
                 ),
               },
