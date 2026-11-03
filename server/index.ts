@@ -31,8 +31,8 @@ import {
   type ResolvedProvider,
 } from './agent/providers'
 import { canFailover, createSink, runGeneration, ModelEngine, type GenContext, type GenSink } from './agent/runner'
-import { assemble, entryPath } from './preview/assemble'
-import { injectTweak, sanitizeTweak } from './preview/tweak'
+import { assemble, entryPath } from '../shared/preview/assemble'
+import { injectTweak, sanitizeTweak } from '../shared/preview/tweak'
 import { createZip } from './export/zip'
 import { seedDatabase } from './store/seed'
 import { Store, resolveDataFile, type StoredSettings } from './store/store'

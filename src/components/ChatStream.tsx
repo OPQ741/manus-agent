@@ -1,19 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Flex, Tooltip, Typography } from 'antd'
 import {
+  BulbOutlined,
   CheckCircleFilled,
   CheckOutlined,
   ClockCircleOutlined,
   CloseOutlined,
+  CodeOutlined,
   DownOutlined,
   ExclamationCircleFilled,
   FileTextOutlined,
+  HourglassOutlined,
   LoadingOutlined,
   RightOutlined,
+  SafetyCertificateOutlined,
   ThunderboltOutlined,
   WarningOutlined,
 } from '@ant-design/icons'
 import type { Check, Message, Plan, ProviderInfo, Usage } from '../../shared/types'
+import { fmtSec } from '../lib/format'
+import { effectiveStage, STAGE_LABEL, type RunStage } from '../lib/run-stage'
 import { AgentAvatar, Badge, type AgentRole } from './ui'
 
 const { Text } = Typography
@@ -79,13 +85,11 @@ export const EMPTY_LIVE: LiveState = {
   provider: null,
 }
 
-const STAGE_LABEL: Record<string, string> = { plan: '拆解需求', write: '编写代码', verify: '静态自检' }
-
-function fmtSec(ms: number): string {
-  const s = Math.max(0, ms) / 1000
-  if (s < 10) return `${s.toFixed(1)}s`
-  if (s < 60) return `${Math.round(s)}s`
-  return `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, '0')}s`
+/** 阶段图标：时间线、状态条共用同一套语义，扫一眼就知道走到哪一步了 */
+const STAGE_ICON: Record<RunStage, React.ReactNode> = {
+  plan: <BulbOutlined />,
+  write: <CodeOutlined />,
+  verify: <SafetyCertificateOutlined />,
 }
 
 function fmtChars(chars: number): string {
@@ -94,7 +98,7 @@ function fmtChars(chars: number): string {
 }
 
 /** 运行中的秒表：只在 running 时开 timer，停下就别再让 React 每秒空转。 */
-function useTicker(active: boolean): number {
+export function useTicker(active: boolean): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!active) return
@@ -132,12 +136,15 @@ function RunStep({
   status,
   title,
   meta,
+  icon,
   children,
   last,
 }: {
   status: RowStatus
   title: React.ReactNode
   meta?: React.ReactNode
+  /** 阶段图标：挂在标题前，和时间线右侧的 bullet 表达同一件事 */
+  icon?: React.ReactNode
   children?: React.ReactNode
   last?: boolean
 }) {
@@ -156,6 +163,7 @@ function RunStep({
       </span>
       <div className="run-main">
         <div className="run-line">
+          {icon ? <span className="run-step-icon">{icon}</span> : null}
           <span className="run-title">{title}</span>
           {meta ? <span className="run-meta">{meta}</span> : null}
         </div>
@@ -189,13 +197,21 @@ function Thinking({
   plan,
   streaming,
   defaultOpen = false,
+  forceOpen,
 }: {
   text: string
   plan: Plan | null
   streaming?: boolean
   defaultOpen?: boolean
+  /**
+   * 生成中强制展开。
+   * 用户提的正是这点：方案出来之后卡片自动收起，界面只剩"编写代码"四个字，
+   * 看上去像什么都没发生。生成过程中它必须是展开的 —— 这是此刻唯一有信息量的地方。
+   */
+  forceOpen?: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  const opened = open || Boolean(forceOpen)
   const hasText = Boolean(text.trim())
   const steps = plan?.steps ?? []
   const summary = plan?.summary ?? ''
@@ -204,12 +220,12 @@ function Thinking({
   const preview = (hasText ? text : summary).trim().replace(/\s+/g, ' ').slice(0, 68)
 
   return (
-    <div className={`thought${open ? ' is-open' : ''}`}>
-      <button type="button" className="thought-head" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-        <span className="thought-caret">{open ? <DownOutlined /> : <RightOutlined />}</span>
+    <div className={`thought${opened ? ' is-open' : ''}${forceOpen ? ' is-locked' : ''}`}>
+      <button type="button" className="thought-head" onClick={() => setOpen((value) => !value)} aria-expanded={opened}>
+        <span className="thought-caret">{opened ? <DownOutlined /> : <RightOutlined />}</span>
         <span className="thought-label">深度思考</span>
         {plan ? <span className="thought-name">{plan.name}</span> : null}
-        {!open && preview ? <span className="thought-preview">{preview}…</span> : null}
+        {!opened && preview ? <span className="thought-preview">{preview}…</span> : null}
         {streaming ? (
           <span className="thought-live">
             <span className="live-dot" />
@@ -218,7 +234,7 @@ function Thinking({
         ) : null}
       </button>
 
-      {open ? (
+      {opened ? (
         <div className="thought-body">
           {plan?.summary ? <p className="thought-summary">{plan.summary}</p> : null}
           {steps.length > 0 ? (
@@ -290,6 +306,27 @@ function FileRow({ file, now }: { file: LiveFile; now: number }) {
   )
 }
 
+/**
+ * 还没开始写的文件。
+ *
+ * 方案里点名了 3 个文件，但只有第一个到达时才出现第一行 —— 中间那段时间
+ * "编写代码" 底下是空的。把计划里的文件先占位摆出来，用户一开始就知道
+ * 这一轮要产出什么、还剩几个，而不是盯着一行字猜。
+ */
+function PendingFileRow({ path, purpose }: { path: string; purpose?: string }) {
+  return (
+    <li className="run-file is-pending">
+      <div className="run-file-head">
+        <span className="run-file-icon">
+          <HourglassOutlined />
+        </span>
+        <span className="run-file-path mono">{path}</span>
+        <span className="run-file-meta">{purpose || '排队中'}</span>
+      </div>
+    </li>
+  )
+}
+
 function Metrics({ usage, provider, version }: { usage: Usage | null; provider: ProviderInfo | null; version?: number }) {
   if (!usage && !provider) return null
   return (
@@ -335,10 +372,18 @@ function LiveBlock({ live }: { live: LiveState }) {
 
   const marks = marksRef.current
   const planDone = Boolean(live.plan) || Boolean(marks.plan?.to)
-  const writeRunning = live.stage === 'write'
-  const verifyStarted = live.stage === 'verify' || live.checks.length > 0
+  // 阶段结束事件会把 live.stage 置回 null，直接读它会在收尾阶段显示成回到拆解；
+  // 计时标记仍用原始事件（只在阶段真正切换时打点），显示一律走 effectiveStage。
+  const stage = effectiveStage(live)
+  const writeRunning = stage === 'write'
+  const verifyStarted = stage === 'verify' || live.checks.length > 0
   const okCount = live.checks.filter((check) => check.ok).length
   const badCount = live.checks.length - okCount
+  const blockFailed = live.checks.some((check) => !check.ok && check.level === 'block')
+  /** 方案里点名、但还没开始写的文件：先占位，别让"编写代码"底下空白一段时间 */
+  const pending = (live.plan?.files ?? [])
+    .filter((file) => !live.files.some((item) => item.path === file.path))
+    .slice(0, 4)
 
   return (
     <article className="turn agent is-live">
@@ -351,6 +396,7 @@ function LiveBlock({ live }: { live: LiveState }) {
           </span>
         </div>
         <div className="spacer" />
+        <span className="turn-stage">{live.running ? STAGE_LABEL[stage] : '已完成'}</span>
         <span className="turn-clock">
           <span className="live-dot" />
           {fmtSec(elapsed)}
@@ -360,12 +406,22 @@ function LiveBlock({ live }: { live: LiveState }) {
       <div className="turn-body">
         <ol className="run-timeline">
           <RunStep
-            status={planDone ? 'done' : live.stage === 'plan' ? 'running' : 'idle'}
+            status={planDone ? 'done' : stage === 'plan' ? 'running' : 'idle'}
             title={STAGE_LABEL.plan}
+            icon={STAGE_ICON.plan}
             meta={
-              planDone && marks.plan ? fmtSec((marks.plan.to ?? Date.now()) - marks.plan.from) : live.stage === 'plan' ? '…' : null
+              planDone && marks.plan ? fmtSec((marks.plan.to ?? Date.now()) - marks.plan.from) : stage === 'plan' ? '…' : null
             }
-          />
+          >
+            {/* 模型还没开口/还没出方案时，给一条会呼吸的占位：纯 spinner 看着像卡住了 */}
+            {live.running && !live.plan && !live.thought ? (
+              <div className="run-skeleton" aria-hidden="true">
+                <span className="sk-line" style={{ width: '82%' }} />
+                <span className="sk-line" style={{ width: '64%' }} />
+                <span className="sk-line" style={{ width: '45%' }} />
+              </div>
+            ) : null}
+          </RunStep>
 
           {live.thought || live.plan ? (
             <li className="run-step is-plain">
@@ -378,14 +434,16 @@ function LiveBlock({ live }: { live: LiveState }) {
                   plan={live.plan}
                   streaming={live.running && !live.files.length}
                   defaultOpen={!live.plan}
+                  forceOpen={live.running}
                 />
               </div>
             </li>
           ) : null}
 
           <RunStep
-            status={live.files.length === 0 && writeRunning ? 'running' : writeRunning ? 'running' : live.files.length ? 'done' : 'idle'}
+            status={live.files.length ? 'done' : writeRunning ? 'running' : 'idle'}
             title={STAGE_LABEL.write}
+            icon={STAGE_ICON.write}
             meta={
               live.files.length
                 ? `${live.files.filter((file) => file.done).length}/${live.files.length} 个文件`
@@ -394,19 +452,26 @@ function LiveBlock({ live }: { live: LiveState }) {
                   : null
             }
           >
-            {live.files.length > 0 ? (
+            {live.files.length > 0 || pending.length > 0 ? (
               <ul className="run-files">
                 {live.files.map((file) => (
                   <FileRow key={file.path} file={file} now={now} />
                 ))}
+                {live.running ? pending.map((file) => <PendingFileRow key={file.path} path={file.path} purpose={file.purpose} />) : null}
               </ul>
+            ) : writeRunning ? (
+              <div className="run-skeleton" aria-hidden="true">
+                <span className="sk-line" style={{ width: '70%' }} />
+                <span className="sk-line" style={{ width: '52%' }} />
+              </div>
             ) : null}
           </RunStep>
 
           {verifyStarted ? (
             <RunStep
-              status={live.stage === 'verify' ? 'running' : live.checks.length ? (badCount > 0 ? 'done' : 'done') : 'idle'}
+              status={stage === 'verify' ? 'running' : live.checks.length ? (blockFailed ? 'failed' : 'done') : 'idle'}
               title={STAGE_LABEL.verify}
+              icon={STAGE_ICON.verify}
               meta={
                 live.checks.length ? (
                   <span className={badCount > 0 ? 'has-warn' : ''}>

@@ -327,13 +327,16 @@ try {
     await kept.first().waitFor({ timeout: 10_000 })
     assert.ok((await kept.count()) >= 1, '版本列表里没有「中断保留」条目')
 
-    // 顺带确认界面上的停止按钮：出现、且文案说清楚会保留什么
+    // 顺带确认界面上的停止按钮：生成中出现在状态条里（文案收成「停止」，
+    // "保留已完成文件"的说明移到 tooltip 里，避免把窄窄的对话栏挤爆）
     const chat = page.locator('.chat-input textarea')
     await chat.fill('再加一句说明文字')
     await page.getByRole('button', { name: /^发送$/ }).click()
-    const stop = page.getByRole('button', { name: /保留已完成文件/ })
+    const stop = page.locator('.run-status').getByRole('button', { name: /^停止$/ })
     await stop.waitFor({ state: 'visible', timeout: 20_000 })
     await waitForGenerationEnd()
+    // 生成结束后状态条必须消失：留着它会变成一条永不消失的"卡住了"提示
+    await page.locator('.run-status').waitFor({ state: 'detached', timeout: 20_000 })
   })
 
   await step('E2E-12 设计微调实时生效、刷新后仍在', async () => {

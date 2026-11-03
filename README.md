@@ -230,7 +230,7 @@ server/agent/protocol.ts    NWF 增量状态机
 server/agent/llm.ts         OpenAI 兼容 SSE + max_tokens/推理强度 + 429 + SSRF 防护 + 额外鉴权头（api-key）
 server/agent/prompts.ts     协议契约 · 设计令牌契约 · 迭代上下文 · 修复轮提示词
 server/agent/runner.ts      ModelEngine 单实现 + 事件归一 + 换家判据
-server/preview/assemble.ts  内联组装 + 沙箱桥 + storage shim + 语法闸门
+shared/preview/assemble.ts  内联组装 + 沙箱桥 + storage shim + 语法闸门（前后端共用：生成中本地实时预览也走它）
 server/store/store.ts       原子写 + 版本 + 回滚（schema 2）
 server/store/seed.ts        载入出厂示例（真实模型产物）
 src/pages/Studio.tsx        工作台（对话流 + 预览 + 代码 + 版本）

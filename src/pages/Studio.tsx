@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { TextAreaRef } from 'antd/es/input/TextArea'
 import { Alert, Button, Flex, Input, Result, Space, Spin, Tabs, Tooltip, Typography } from 'antd'
 import {
@@ -8,17 +8,17 @@ import {
   EditOutlined,
   EyeOutlined,
   HistoryOutlined,
-  LoadingOutlined,
   SendOutlined,
   ShareAltOutlined,
-  StopOutlined,
 } from '@ant-design/icons'
-import type { AgentEvent, DesignTweak, Project, ProjectDetail, PublicSettings } from '../../shared/types'
+import type { AgentEvent, DesignTweak, FileEntry, Project, ProjectDetail, PublicSettings } from '../../shared/types'
+import { assemble } from '../../shared/preview/assemble'
 import { ChatStream, EMPTY_LIVE, type LiveState } from '../components/ChatStream'
 import { CodePanel } from '../components/CodePanel'
 import { ModelMenu } from '../components/ModelMenu'
 import { PreviewPanel } from '../components/PreviewPanel'
 import { ProjectSettingsModal } from '../components/ProjectSettingsModal'
+import { RunStatusBar } from '../components/RunStatusBar'
 import { TopBar } from '../components/TopBar'
 import { VersionPanel } from '../components/VersionPanel'
 import { Badge, toast } from '../components/ui'
@@ -32,8 +32,6 @@ import { takePendingPrompt } from '../lib/pending'
 type Tab = 'preview' | 'code' | 'versions'
 
 const MAX_ERRORS = 20
-
-const STAGE_TEXT: Record<string, string> = { write: '正在写代码', verify: '正在自检' }
 
 /**
  * 把一批 SSE 事件折进「进行中」状态。
@@ -159,6 +157,41 @@ export function StudioPage({ id }: { id: string }) {
   /** 当前项目已有多少文件 —— 用来判断「首次生成」还是「迭代」，避免抢用户的页签 */
   const fileCountRef = useRef(0)
   const runningFileRef = live.files.find((file) => !file.done)?.path ?? null
+
+  /**
+   * 边生成边预览。
+   *
+   * 以前整轮结束前右半屏永远是空的：模型写完 index.html 的那一刻页面其实已经能跑了，
+   * 但预览要等服务端的 done + 一次项目回读。这里用同一个组装器在本地现组一份 ——
+   * 每完成一个文件就重算，预览是"长出来"的，而不是最后"跳出来"的。
+   *
+   * 只在 file_end 时重算（键里带路径 + 行数 + 长度）：file_delta 每秒几十次，
+   * 每次都跑一遍内联 + 语法体检会把主线程吃满，反而让流式变卡。
+   *
+   * 注意必须挂在所有 early return 之前 —— hook 数量一旦随分支变化，React 直接报错 #310。
+   */
+  const doneKey = live.files
+    .filter((file) => file.done)
+    .map((file) => `${file.path}:${file.lines}:${file.content.length}`)
+    .join('|')
+  const baseKey = (detail?.project.files ?? []).map((file) => `${file.path}:${file.updatedAt}`).join('|')
+  const livePreviewHtml = useMemo(() => {
+    if (!live.running || !doneKey || !detail) return ''
+    const merged = new Map<string, FileEntry>()
+    // 上一版的文件先铺底：迭代时本轮只改了 app.js，index.html 得从旧版借
+    for (const file of detail.project.files) merged.set(file.path, file)
+    for (const file of live.files) {
+      if (file.done) merged.set(file.path, { path: file.path, content: file.content, updatedAt: Date.now() })
+    }
+    // 入口还没写完就不组：半截 HTML 预览出来是一片乱版，比骨架更糟
+    if (![...merged.values()].some((file) => /^(index|main|app)\.html?$/i.test(file.path))) return ''
+    try {
+      return assemble([...merged.values()], detail.project.tweak).html
+    } catch {
+      return ''
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doneKey, baseKey, live.running, detail])
 
   useEffect(() => {
     fileCountRef.current = detail?.project.files.length ?? 0
@@ -310,6 +343,9 @@ export function StudioPage({ id }: { id: string }) {
       const data = event.data as { __nucleus?: number; kind?: string; message?: string } | null
       if (!data || data.__nucleus !== 1) return
       if (data.kind === 'error' && data.message) {
+        // 生成进行中忽略：此刻预览是半成品（app.js 还没写完，引用必然 404），
+        // 这些"错误"是预期的中间态，报出来只会让人以为生成失败了。
+        if (busyRef.current) return
         const message = data.message
         setRuntimeErrors((prev) => (prev.includes(message) ? prev : [...prev, message].slice(0, MAX_ERRORS)))
       } else if (data.kind === 'storage') {
@@ -524,6 +560,14 @@ export function StudioPage({ id }: { id: string }) {
           ) : null}
 
           <div className="chat-composer">
+            {/*
+              唯一的实时状态出口。
+              之前左下角一个转圈、右上角页签旁一个徽标在说同一件事，
+              两头看还都对不上（一个只说阶段，一个只说文件名）。现在合成下面这一条，
+              阶段 / 分段进度 / 百分比 / 当前文件 / 已用时 / 停止全在一起。
+            */}
+            {busy ? <RunStatusBar live={live} onStop={stop} /> : null}
+
             <div className="chat-input">
               <Input.TextArea
                 ref={inputRef}
@@ -548,23 +592,16 @@ export function StudioPage({ id }: { id: string }) {
               />
               <Flex className="chat-input-bar" align="center" gap={8}>
                 {busy ? (
-                  <Space size={6}>
-                    <Spin indicator={<LoadingOutlined spin />} size="small" />
-                    <Typography.Text type="secondary" style={{ fontSize: 11.5 }}>
-                      {STAGE_TEXT[live.stage ?? ''] ?? '正在拆解'}
-                    </Typography.Text>
-                  </Space>
+                  <Typography.Text type="secondary" style={{ fontSize: 11.5 }}>
+                    生成中，输入框暂时锁定 · 按 Esc 也可停止
+                  </Typography.Text>
                 ) : (
                   <Typography.Text type="secondary" style={{ fontSize: 11.5 }}>
                     ⌘/Ctrl + Enter 发送 · ⌘/Ctrl + K 聚焦
                   </Typography.Text>
                 )}
                 <div className="spacer" />
-                {busy ? (
-                  <Button size="small" icon={<StopOutlined />} onClick={stop}>
-                    停止（保留已完成文件）
-                  </Button>
-                ) : (
+                {busy ? null : (
                   <Button
                     type="primary"
                     size="small"
@@ -586,16 +623,6 @@ export function StudioPage({ id }: { id: string }) {
             className="ws-tabs"
             activeKey={tab}
             onChange={(key) => setTab(key as Tab)}
-            tabBarExtraContent={
-              live.running ? (
-                <Badge tone="accent">
-                  <Space size={5}>
-                    <Spin indicator={<LoadingOutlined spin />} size="small" />
-                    {runningFileRef ? `写入 ${runningFileRef}` : '运行中'}
-                  </Space>
-                </Badge>
-              ) : null
-            }
             items={[
               {
                 key: 'preview',
@@ -608,9 +635,11 @@ export function StudioPage({ id }: { id: string }) {
                   <PreviewPanel
                     projectId={id}
                     html={previewHtml}
+                    liveHtml={livePreviewHtml}
                     checks={project.checks}
                     errors={runtimeErrors}
                     tweak={project.tweak}
+                    live={live}
                     onTweakSave={saveTweak}
                     onHeal={heal}
                     onRefresh={() => void refresh()}

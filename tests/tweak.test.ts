@@ -10,8 +10,8 @@
 import { describe, expect, it } from 'vitest'
 import type { FileEntry } from '../shared/types'
 import { contrastInk, lighten, normalizeHex, tweakVars } from '../shared/theme'
-import { assemble } from '../server/preview/assemble'
-import { injectTweak, sanitizeTweak, tweakCss, usesDesignTokens } from '../server/preview/tweak'
+import { assemble } from '../shared/preview/assemble'
+import { injectTweak, sanitizeTweak, tweakCss, usesDesignTokens } from '../shared/preview/tweak'
 
 function app(files: { path: string; content: string }[]): FileEntry[] {
   return files.map((file) => ({ ...file, updatedAt: 0 }))

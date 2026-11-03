@@ -45,6 +45,14 @@ export function copyText(text: string): Promise<void> {
   return Promise.resolve()
 }
 
+/** 耗时显示：短任务要看到小数（0.3s），长任务要看到分秒（1m 05s）。 */
+export function fmtSec(ms: number): string {
+  const s = Math.max(0, ms) / 1000
+  if (s < 10) return `${s.toFixed(1)}s`
+  if (s < 60) return `${Math.round(s)}s`
+  return `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, '0')}s`
+}
+
 export function shortPath(path: string): string {
   return path.replace(/^\.\//, '')
 }

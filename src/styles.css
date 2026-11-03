@@ -708,6 +708,16 @@ pre {
   white-space: nowrap;
 }
 
+.turn-stage {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  white-space: nowrap;
+}
+
 .turn-clock {
   display: inline-flex;
   align-items: center;
@@ -883,6 +893,24 @@ pre {
   color: var(--warn);
 }
 
+/* 步骤图标：和时间线 bullet 呼应，但挂在标题上 —— 收起状态下也能看出是哪一步 */
+.run-step-icon {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--muted);
+  flex: none;
+}
+
+.run-step.is-running .run-step-icon,
+.run-step.is-done .run-step-icon {
+  color: var(--accent);
+}
+
+.run-step.is-failed .run-step-icon {
+  color: var(--danger);
+}
+
 .run-notice-text {
   font-size: 11.5px;
   font-weight: 400;
@@ -963,6 +991,54 @@ pre {
 
 .run-file-time {
   margin-left: 2px;
+}
+
+.run-file.is-pending {
+  border-style: dashed;
+  background: transparent;
+  opacity: 0.72;
+}
+
+.run-file.is-pending .run-file-meta {
+  flex: none;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * 骨架占位：模型还没吐出第一行时用它顶住版面。
+ * 纯 spinner 会被读成"卡住了"，会呼吸的灰条读成"在加载"。
+ */
+.run-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 4px 0 2px;
+}
+
+.sk-line,
+.pb-line,
+.pb-card-sk {
+  background: linear-gradient(90deg, var(--bg-soft) 25%, var(--line) 37%, var(--bg-soft) 63%);
+  background-size: 400% 100%;
+  animation: sk-shimmer 1.5s ease-in-out infinite;
+}
+
+.sk-line {
+  display: block;
+  height: 8px;
+  border-radius: 5px;
+}
+
+@keyframes sk-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
 }
 
 .code-peek {
@@ -1246,6 +1322,176 @@ pre {
   border-top: 1px dashed var(--line);
 }
 
+/* --------------------------- 生成状态条（唯一出口） -------------------------- */
+
+/*
+ * 阶段 + 分段 + 百分比 + 当前文件 + 已用时 + 停止，全部收在这一条里。
+ * 放在输入框上方而不是页签旁：停止按钮必须紧挨着"我刚发出的那句话"。
+ */
+.run-status {
+  margin-bottom: 8px;
+  padding: 8px 10px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.run-status-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.run-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 2px 9px 2px 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--on-accent-soft);
+  background: var(--accent-soft);
+}
+
+.run-status-icon {
+  display: inline-flex;
+  font-size: 12px;
+}
+
+.run-status-chip.is-write .run-status-icon {
+  color: var(--accent);
+}
+
+.run-status-chip.is-plan .run-status-icon {
+  color: color-mix(in srgb, var(--accent) 70%, var(--warn));
+}
+
+.run-status-chip.is-verify .run-status-icon {
+  color: var(--ok);
+}
+
+/* 三阶段分段指示：比"第 2 步 / 共 3 步"更快读懂。独占一行，连接线平分剩余宽度 */
+.run-status-steps {
+  display: flex;
+  align-items: center;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-status-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.run-status-step:not(:last-child)::after {
+  content: '';
+  flex: 1;
+  width: 14px;
+  min-width: 8px;
+  height: 1px;
+  margin: 0 6px;
+  background: var(--line-strong);
+}
+
+.run-status-step-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  font-size: 8px;
+}
+
+.run-status-step.is-done .run-status-step-dot {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--ok) 14%, var(--surface));
+  color: var(--ok);
+}
+
+.run-status-step.is-now .run-status-step-dot {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--surface);
+}
+
+.run-status-step.is-now .run-status-step-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.run-status-clock {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-status-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-soft);
+  overflow: hidden;
+}
+
+.run-status-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 60%, #ffffff), var(--accent));
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.run-status-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.run-status-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 62%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-soft);
+}
+
+.run-status-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-status-pct {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--accent);
+}
+
 /* 右：工作区 */
 
 .workspace {
@@ -1301,6 +1547,96 @@ pre {
 
 .preview-toolbar .ant-btn {
   color: var(--ink-soft);
+}
+
+/*
+ * 设备切换：不用实心主色块。
+ * primary 按钮是"蓝底 + 白图标"，线稿图标在这种底上几乎糊成一块色斑；
+ * 换成浅主色底 + 主色描边图标，选中态一样明确，但图标本身仍然认得出。
+ */
+.dev-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg-soft);
+}
+
+.dev-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.dev-btn:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.dev-btn.is-on {
+  color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 34%, var(--line)), 0 1px 2px rgba(20, 20, 26, 0.06);
+}
+
+/* 工具栏里"被打开"的按钮（设计微调）同样不走实心色：换底色 + 主色文字即可 */
+.tool-btn.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/*
+ * 已有内容时的"正在更新"：预览上方一条状态带 + 底下走动的进度线。
+ * 刻意不浮在画布上 —— 浮层会盖住生成物自己的内容，白底药丸压在深色页面上尤其刺眼。
+ */
+.preview-refreshing {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 3px 12px 4px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.preview-refreshing .pr-bar {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  height: 2px;
+  width: 34%;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: pr-slide 1.3s ease-in-out infinite;
+}
+
+@keyframes pr-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+.preview-refreshing .pr-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  white-space: nowrap;
 }
 
 .url-pill {
@@ -1375,11 +1711,171 @@ pre {
   width: 390px;
 }
 
+/*
+ * 空态：必须是**一列居中**而不是 grid。
+ * 之前用 `display:grid; place-items:center`，antd 的 image 与 description 会各自
+ * 占一行、各自在自己那半格里居中 —— 图标飘在上方、文案沉在下方，中间一大块空白。
+ */
 .preview-empty {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+/* 空态给一个看得清的图标容器，而不是 antd 默认那张偏灰的插画 */
+.empty-art {
   display: grid;
   place-items: center;
-  padding: 40px;
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 10px;
+  border-radius: 16px;
+  font-size: 22px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* antd 的默认空态是按 100px 高的插画排版的，换成小图标后那段高度会变成空白 */
+.preview-empty .ant-empty-image {
+  height: auto;
+  margin-bottom: 4px;
+}
+
+/* ----------------------------- 生成中的预览区 ----------------------------- */
+
+/*
+ * 骨架页 + 状态卡：让"正在生成"这件事在右半屏可见。
+ * 骨架撑起即将出现的版面，状态卡说明此刻写到哪、还剩几个文件。
+ */
+.preview-building {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  padding: 28px 32px;
+  overflow: hidden;
+}
+
+.pb-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.pb-line {
+  display: block;
+  height: 10px;
+  width: 68%;
+  border-radius: 5px;
+}
+
+.pb-line.pb-hero {
+  height: 76px;
+  width: 100%;
+  border-radius: 10px;
+}
+
+.pb-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.pb-card-sk {
+  display: block;
+  height: 62px;
+  border-radius: 9px;
+}
+
+.pb-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.pb-ring {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-top-color: var(--accent);
+  animation: pb-spin 0.9s linear infinite;
+}
+
+@keyframes pb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pb-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pb-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.pb-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pb-count {
+  margin-left: auto;
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+}
+
+.pb-queue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pb-chip {
+  font-size: 10.5px;
+  color: var(--muted);
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px dashed var(--line-strong);
+  background: var(--surface);
+}
+
+/* 生成中不让折叠：这一条是此刻唯一有信息量的地方，点掉就只剩一个转圈 */
+.thought.is-locked .thought-head {
+  cursor: default;
 }
 
 /* 设计微调条 */

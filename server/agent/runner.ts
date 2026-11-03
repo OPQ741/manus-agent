@@ -20,7 +20,7 @@ import type {
   ProviderInfo,
   Usage,
 } from '../../shared/types'
-import { assemble } from '../preview/assemble'
+import { assemble } from '../../shared/preview/assemble'
 import { LlmError, streamChat, type LlmConfig } from './llm'
 import type { ResolvedProvider } from './providers'
 import { editTurnMessages, firstTurnMessages, repairMessages } from './prompts'

@@ -1,23 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Card, Empty, Flex, Space, Tooltip, Typography } from 'antd'
 import {
+  BgColorsOutlined,
   CheckCircleFilled,
   DesktopOutlined,
   ExclamationCircleFilled,
   ExportOutlined,
+  FileTextOutlined,
   MobileOutlined,
   ReloadOutlined,
   ShareAltOutlined,
-  BgColorsOutlined,
   TabletOutlined,
 } from '@ant-design/icons'
 import type { Check, DesignTweak } from '../../shared/types'
 import { tweakVars } from '../../shared/theme'
 import { injectSeed, readSeed } from '../lib/seed'
+import { effectiveStage, STAGE_LABEL } from '../lib/run-stage'
 import { TweakPanel } from './TweakPanel'
 import { toast } from './ui'
+import type { LiveState } from './ChatStream'
 
 const { Text } = Typography
+
+/** live 为空（未生成）时的兜底：让 effectiveStage 拿到一个合法形状，省掉到处判空 */
+const EMPTY_STAGE = { files: [], checks: [] } satisfies Parameters<typeof effectiveStage>[0]
 
 type Device = 'desktop' | 'tablet' | 'mobile'
 
@@ -29,17 +35,103 @@ const DEVICES: { value: Device; label: string; icon: React.ReactNode }[] = [
 
 interface Props {
   projectId: string
+  /** 服务端已落库的版本（最终真相） */
   html: string
+  /** 生成过程中本地现组的版本：入口文件一写完就能看，不必等整轮结束 */
+  liveHtml?: string
   checks: Check[]
   errors: string[]
   tweak?: DesignTweak
+  /** 生成中的实时状态：非空表示这一轮还在跑 */
+  live?: LiveState | null
   onTweakSave: (next: DesignTweak | undefined) => Promise<void>
   onHeal: () => void
   onRefresh: () => void
   shareUrl: string | null
 }
 
-export function PreviewPanel({ projectId, html, checks, errors, tweak, onTweakSave, onHeal, onRefresh, shareUrl }: Props) {
+/**
+ * 生成中的预览区。
+ *
+ * 以前这里直接落到一个"还没有可预览的内容"空态：右边整屏在几十秒里什么都没有，
+ * 而真实情况是模型正在一个个文件地写。现在用骨架页（hero / 标题 / 卡片栅格）
+ * 先把"即将出现的页面"撑起来，再叠一张状态卡说明此刻写到哪、还剩几个文件 ——
+ * 骨架的作用是让等待可感知，状态卡的作用是让等待可理解。
+ */
+function PreviewBuilding({ live }: { live: LiveState }) {
+  const stage = effectiveStage(live)
+  const files = live.files
+  const planned = live.plan?.files ?? []
+  const done = files.filter((file) => file.done).length
+  const total = Math.max(files.length, planned.length)
+  const active = files.find((file) => !file.done)
+  const upcoming = planned.filter((file) => !files.some((item) => item.path === file.path))
+
+  return (
+    <div className="preview-building">
+      <div className="pb-skeleton" aria-hidden="true">
+        <span className="pb-line" style={{ width: '38%' }} />
+        <span className="pb-line pb-hero" />
+        <span className="pb-line" style={{ width: '56%', height: 18 }} />
+        <span className="pb-line" style={{ width: '78%' }} />
+        <div className="pb-grid">
+          <span className="pb-card-sk" />
+          <span className="pb-card-sk" />
+          <span className="pb-card-sk" />
+        </div>
+        <span className="pb-line" style={{ width: '46%' }} />
+      </div>
+
+      <div className="pb-status" role="status" aria-live="polite">
+        <span className="pb-ring" aria-hidden="true" />
+        <div className="pb-copy">
+          <span className="pb-title">{STAGE_LABEL[stage]}</span>
+          <span className="pb-sub">
+            {active ? (
+              <>
+                正在写入 <span className="mono">{active.path}</span>
+                {active.lines > 0 ? ` · ${active.lines} 行` : ''}
+              </>
+            ) : live.plan?.name ? (
+              live.plan.name
+            ) : (
+              '正在理解需求…'
+            )}
+          </span>
+        </div>
+        {total > 0 ? (
+          <span className="pb-count">
+            {done}/{total}
+          </span>
+        ) : null}
+      </div>
+
+      {upcoming.length > 0 ? (
+        <div className="pb-queue" aria-label="待生成文件">
+          {upcoming.slice(0, 5).map((file) => (
+            <span key={file.path} className="pb-chip mono" title={file.purpose || file.path}>
+              {file.path}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+export function PreviewPanel({
+  projectId,
+  html,
+  liveHtml = '',
+  checks,
+  errors,
+  tweak,
+  live,
+  onTweakSave,
+  onHeal,
+  onRefresh,
+  shareUrl,
+}: Props) {
   const [device, setDevice] = useState<Device>('desktop')
   const [nonce, setNonce] = useState(0)
   const [showChecks, setShowChecks] = useState(false)
@@ -63,7 +155,9 @@ export function PreviewPanel({ projectId, html, checks, errors, tweak, onTweakSa
     }
   }, [])
 
-  const srcDoc = useMemo(() => injectSeed(html, readSeed(projectId)), [html, projectId, nonce])
+  // 生成中的本地版本优先：它是用"本轮已写完的文件 + 上一版其余文件"现组的，
+  // 比服务端那份还没落库的旧版本新。整轮结束后 liveHtml 归零，自动回到最终真相。
+  const srcDoc = useMemo(() => injectSeed(liveHtml || html, readSeed(projectId)), [html, liveHtml, projectId, nonce])
 
   const blocking = checks.find((check) => check.level === 'block' && !check.ok)
   const passed = checks.filter((check) => check.ok).length
@@ -72,6 +166,9 @@ export function PreviewPanel({ projectId, html, checks, errors, tweak, onTweakSa
   const health = failed > 0 ? 'bad' : warned > 0 ? 'warn' : 'ok'
   const healthLabel = failed > 0 ? `${failed} 项阻断` : warned > 0 ? `${warned} 项提醒` : `${passed} 项检查通过`
   const supportsTokens = checks.find((check) => check.id === 'theme_vars')?.ok ?? true
+  /** 生成中：预览区要显示"正在搭"的过程，而不是一句"还没有可预览的内容" */
+  const running = Boolean(live?.running)
+  const activeFile = live?.files.find((file) => !file.done) ?? null
 
   /** 把草稿推给沙箱：只改变量、不重载文档，应用内的状态不会被打断。 */
   const applyLive = (next: DesignTweak) => {
@@ -152,20 +249,26 @@ export function PreviewPanel({ projectId, html, checks, errors, tweak, onTweakSa
 
       <div className="preview-shell">
         <Flex className="preview-toolbar" align="center" gap={6} wrap>
-          <Space.Compact>
+          {/*
+            设备切换不用 antd 的 primary 按钮：实心主色块会把图标整个吞掉
+            （蓝底蓝描边，看不清是电脑还是手机）。这里改成浅主色底 + 主色图标，
+            选中态靠"底色 + 描边"表达，图标本身保持线稿的辨识度。
+          */}
+          <div className="dev-switch" role="group" aria-label="预览设备">
             {DEVICES.map((item) => (
               <Tooltip key={item.value} title={item.label}>
-                <Button
-                  size="small"
-                  type={device === item.value ? 'primary' : 'default'}
+                <button
+                  type="button"
+                  className={`dev-btn${device === item.value ? ' is-on' : ''}`}
                   aria-label={item.label}
                   aria-pressed={device === item.value}
-                  icon={item.icon}
                   onClick={() => setDevice(item.value)}
-                />
+                >
+                  {item.icon}
+                </button>
               </Tooltip>
             ))}
-          </Space.Compact>
+          </div>
 
           <div className="url-pill">
             <span className="dot" />
@@ -179,7 +282,8 @@ export function PreviewPanel({ projectId, html, checks, errors, tweak, onTweakSa
           <Tooltip title="设计微调：改主色 / 圆角，不用重新生成">
             <Button
               size="small"
-              type={showTweak ? 'primary' : 'text'}
+              type="text"
+              className={`tool-btn${showTweak ? ' is-on' : ''}`}
               aria-label="设计微调"
               aria-expanded={showTweak}
               icon={<BgColorsOutlined />}
@@ -257,21 +361,35 @@ export function PreviewPanel({ projectId, html, checks, errors, tweak, onTweakSa
           </Card>
         ) : null}
 
-        {html ? (
-          <div className={`frame-wrap device-${device}`}>
-            <iframe
-              key={nonce}
-              ref={frameRef}
-              title="应用预览"
-              sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
-              srcDoc={srcDoc}
-              // 重载后用当前草稿补一次：否则保存期间的刷新会闪回旧配色
-              onLoad={() => applyLive(draftRef.current)}
-            />
-          </div>
+        {html || liveHtml ? (
+          <>
+            {running ? (
+              <div className="preview-refreshing" role="status" aria-live="polite">
+                <span className="pr-bar" />
+                <span className="pr-text">
+                  <span className="live-dot" />
+                  {activeFile ? `正在写入 ${activeFile.path}` : `${STAGE_LABEL[effectiveStage(live ?? EMPTY_STAGE)]}…`}
+                </span>
+              </div>
+            ) : null}
+            <div className={`frame-wrap device-${device}`}>
+              <iframe
+                key={nonce}
+                ref={frameRef}
+                title="应用预览"
+                sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+                srcDoc={srcDoc}
+                // 重载后用当前草稿补一次：否则保存期间的刷新会闪回旧配色
+                onLoad={() => applyLive(draftRef.current)}
+              />
+            </div>
+          </>
+        ) : running && live ? (
+          <PreviewBuilding live={live} />
         ) : (
           <Empty
             className="preview-empty"
+            image={<div className="empty-art" aria-hidden="true"><FileTextOutlined /></div>}
             description={
               <Space direction="vertical" size={2}>
                 <Text strong>还没有可预览的内容</Text>

@@ -15,7 +15,7 @@
  * 全部生效；产物不合格时脚本会拒绝写入）。
  */
 
-import { assemble } from '../preview/assemble'
+import { assemble } from '../../shared/preview/assemble'
 import type { Plan, ProviderInfo } from '../../shared/types'
 import type { Store } from './store'
 import factory from './factory-example.json'

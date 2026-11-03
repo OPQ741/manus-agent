@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assemble, bridgeScript, withSeed } from '../server/preview/assemble'
+import { assemble, bridgeScript, withSeed } from '../shared/preview/assemble'
 import { loadFactory } from '../server/store/seed'
 import type { FileEntry } from '../shared/types'
 

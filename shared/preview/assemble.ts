@@ -7,10 +7,14 @@
  *
  * 时间顺序很重要：桥接脚本必须插在 <head> 之后、业务脚本之前，
  * 否则生成的应用在解析阶段抛的错会漏捕获。
+ *
+ * 放在 shared/ 而不是 server/：前端也要用它 —— 生成过程中每写完一个文件就
+ * 本地组装一次，让预览"边生成边长出来"。服务端与浏览器共用同一个组装器，
+ * 才不会出现"预览里能跑、落库后跑不起来"这类两套逻辑漂移出来的问题。
  */
 
-import type { Check, DesignTweak, FileEntry } from '../../shared/types'
-import { MAX_TOTAL_BYTES } from '../../shared/types'
+import type { Check, DesignTweak, FileEntry } from '../types'
+import { MAX_TOTAL_BYTES } from '../types'
 import { injectTweak, usesDesignTokens } from './tweak'
 
 export interface AssembleResult {
@@ -124,6 +128,18 @@ export function bridgeScript(): string {
   }
 })();
 </script>`
+}
+
+/**
+ * UTF-8 字节数。
+ *
+ * 前端也要组装预览（边生成边看，见 Studio 的 liveHtml），所以这里不能直接用
+ * `Buffer` —— 浏览器里没有它，一引用就抛。Node 走 Buffer，浏览器走 TextEncoder，
+ * 两者对 UTF-8 的计数结果一致，体积闸门在两边判出来的结论相同。
+ */
+export function byteLength(text: string): number {
+  if (typeof Buffer !== 'undefined') return Buffer.byteLength(text, 'utf8')
+  return new TextEncoder().encode(text).length
 }
 
 function pickEntry(files: Map<string, FileEntry>): FileEntry | null {
@@ -240,7 +256,7 @@ export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResul
     detail: hasStructure ? '<html> / <body> 正常' : '缺少 <html> 或 <body>，浏览器会自行补全但不保证样式',
   })
 
-  const totalBytes = Buffer.byteLength(html, 'utf8')
+  const totalBytes = byteLength(html)
   checks.push({
     id: 'size',
     label: '体积在预算内',

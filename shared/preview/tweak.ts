@@ -10,8 +10,8 @@
  * 校验输入、生成 <style>、注入 HTML。
  */
 
-import type { DesignTweak } from '../../shared/types'
-import { RADIUS_MAX, RADIUS_MIN, normalizeHex, tweakVars } from '../../shared/theme'
+import type { DesignTweak } from '../types'
+import { RADIUS_MAX, RADIUS_MIN, normalizeHex, tweakVars } from '../theme'
 
 export { RADIUS_MAX, RADIUS_MIN, contrastInk, lighten, normalizeHex, tweakVars } from '../../shared/theme'
 
