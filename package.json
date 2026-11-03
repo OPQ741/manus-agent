@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "make:factory": "esbuild scripts/make-factory.ts --bundle --platform=node --format=esm --outfile=.tmp-factory/run.mjs --log-level=warning && node .tmp-factory/run.mjs",
     "key": "esbuild scripts/set-key.ts --bundle --platform=node --format=esm --outfile=.tmp-key/run.mjs --log-level=warning && node .tmp-key/run.mjs",
+    "deploy:prepare": "node scripts/deploy.mjs",
     "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {

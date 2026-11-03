@@ -21,6 +21,10 @@ coverage/
 .DS_Store
 Thumbs.db
 
+# 部署产物：由 npm run deploy:prepare 生成，内含密钥，不入库
+deploy/start.sh
+deploy/start-command.txt
+
 # 编辑器
 .vscode/
 .idea/
