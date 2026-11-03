@@ -308,15 +308,21 @@ try {
     assert.equal(detail.project.tweak, undefined, '服务端仍保留微调，说明"恢复默认"没落库')
     assert.ok(!detail.previewHtml.includes('data-nucleus="tweak"'), '产物仍注入微调样式')
 
-    // 整页刷新后：回到生成时的主色（墨绿 #17624b），而不是玫红
+    // 生成时的底色是动态的：前面几轮把主色改过红/紫并回滚过，绝不是某个写死的值。
+    // 所以期望值从"已清除微调的产物"里现取——那里面只剩生成自带的那一个 --accent 声明。
+    const baseAccent = (/--accent:\s*(#[0-9a-fA-F]{6})/.exec(detail.previewHtml)?.[1] ?? '').toLowerCase()
+    assert.ok(baseAccent, '产物里没解析到生成时的 --accent')
+    assert.notEqual(baseAccent, '#e11d6b', '底色不该正好等于玫红微调，否则这条断言失去意义')
+
+    // 整页刷新后：回到"生成时的那个主色"（而不是写死的墨绿），且一定不是玫红微调
     await page.reload({ waitUntil: 'networkidle' })
     const after = previewFrame()
     await after.waitForFunction(
-      () => {
+      (expected) => {
         const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim().toLowerCase()
-        return accent === '#17624b'
+        return accent === expected
       },
-      null,
+      baseAccent,
       { timeout: 8000 },
     )
   })
