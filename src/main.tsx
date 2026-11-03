@@ -1,9 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { App as AntdApp, ConfigProvider } from 'antd'
-import zhCN from 'antd/locale/zh_CN'
 import App from './App'
-import { antdTheme } from './theme'
 import 'antd/dist/reset.css'
 import './styles.css'
 
@@ -11,15 +8,12 @@ const container = document.getElementById('root')
 if (!container) throw new Error('缺少 #root 挂载点')
 
 /**
- * ConfigProvider 提供主题令牌与中文文案；antd 的 App 提供 message/modal
- * 的上下文（toast 走它，才能吃到同一套主题，而不是另起一套静态实例）。
+ * 主题在 App 内部装配（ConfigProvider 由 App 提供）：
+ * 设置页换主色 / 切深色要当场重算令牌，所以主题不能在这里写死。
+ * antd 的 App 上下文（message/modal）也随之下沉，toast 才能吃到同一套主题。
  */
 createRoot(container).render(
   <StrictMode>
-    <ConfigProvider locale={zhCN} theme={antdTheme}>
-      <AntdApp>
-        <App />
-      </AntdApp>
-    </ConfigProvider>
+    <App />
   </StrictMode>,
 )

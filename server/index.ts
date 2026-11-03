@@ -629,24 +629,55 @@ export async function createNucleusServer(options: ServerOptions = {}) {
       }
 
       if (pathname === '/api/settings/test' && method === 'POST') {
-        const chain = resolveChain(catalog, storeSettingsUser(store))
-        const target = chain[0]
-        if (!target) throw new HttpError(412, 'provider_unavailable', '没有可测的模型通道：先选一个已就绪的预设，或填自己的 Key')
+        /**
+         * 支持直接测「还没保存的草稿」。
+         *
+         * 没有草稿（body 为空）时测当前解析链的第一家 —— 也就是"现在点生成会打给谁"。
+         */
+        const body = await readJson<{ baseUrl?: string; model?: string; apiKey?: string }>(req)
+        const current = store.getSettings()
+        const wantsDraft = Boolean(body.baseUrl?.trim() || body.model?.trim() || body.apiKey?.trim())
+
+        let target: { baseUrl: string; apiKey: string; model: string; label: string; headers?: Record<string, string> }
+        if (wantsDraft) {
+          const guard = validateBaseUrl((body.baseUrl ?? current.baseUrl).trim())
+          if (!guard.ok) throw new HttpError(400, 'bad_request', guard.reason)
+          const model = (body.model ?? current.model).trim()
+          if (!model) throw new HttpError(400, 'bad_request', '模型名不能为空')
+          target = {
+            baseUrl: guard.url,
+            model,
+            apiKey: (body.apiKey ?? current.apiKey).trim(),
+            label: '我的 Key',
+          }
+        } else {
+          const chain = resolveChain(catalog, storeSettingsUser(store))
+          const first = chain[0]
+          if (!first) throw new HttpError(412, 'provider_unavailable', '没有可测的模型通道：先选一个已就绪的预设，或填自己的 Key')
+          target = {
+            baseUrl: first.profile.baseUrl,
+            model: first.profile.model,
+            apiKey: first.apiKey,
+            label: first.profile.id,
+            headers: first.profile.headers,
+          }
+        }
+
         try {
           const result = await testConnection({
-            baseUrl: target.profile.baseUrl,
+            baseUrl: target.baseUrl,
             apiKey: target.apiKey,
-            model: target.profile.model,
+            model: target.model,
             maxTokens: 32,
             temperature: 0,
-            headers: target.profile.headers,
+            headers: target.headers,
           })
           sendJson(res, 200, {
             ok: true,
             ms: result.ms,
             sample: result.sample,
-            model: target.profile.model,
-            provider: target.profile.id,
+            model: target.model,
+            provider: target.label,
           })
         } catch (error) {
           const code = error instanceof LlmError ? error.code : 'internal'

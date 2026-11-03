@@ -117,9 +117,17 @@ export const api = {
     apiKey?: string
     design?: Partial<DesignPrefs>
   }) => request<PublicSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(input) }),
-  testConnection: () =>
+  /**
+   * 测试连接。
+   *
+   * 传入草稿（还没保存的自带 Key）时只测草稿，**不落库** ——
+   * 以前是先 PUT 再测，等于"点一下测试就顺手保存了"，语义很怪，
+   * 而且测到的可能不是用户当下填的那一家。
+   */
+  testConnection: (draft?: { baseUrl?: string; model?: string; apiKey?: string }) =>
     request<{ ok: boolean; ms: number; sample: string; model: string; provider: string }>('/api/settings/test', {
       method: 'POST',
+      body: JSON.stringify(draft ?? {}),
     }),
   share: (slug: string) => request<ShareDetail>(`/api/share/${encodeURIComponent(slug)}`),
   exportUrl: (id: string) => `/api/projects/${encodeURIComponent(id)}/export`,

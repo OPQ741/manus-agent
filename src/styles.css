@@ -19,6 +19,12 @@
   --line-strong: #d8d5cd;
   --accent: #4b3bff;
   --accent-soft: #eeebff;
+  --on-accent-soft: #2a2470;
+  --topbar-bg: rgba(255, 255, 255, 0.86);
+  --notice-warn-bg: #fdf4e7;
+  --bubble-error-bg: #fdecef;
+  --bubble-error-ink: #93304a;
+  --swatch-ring: rgba(20, 20, 26, 0.14);
   --ok: #0f7a5a;
   --warn: #a9651f;
   --danger: #c2405c;
@@ -29,6 +35,34 @@
   --shadow: 0 1px 2px rgba(20, 20, 26, 0.04), 0 10px 30px rgba(20, 20, 26, 0.07);
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   color-scheme: light;
+}
+
+/**
+ * 深色主题：只换变量，不重写布局。
+ *
+ * `--accent-soft` 用 color-mix 从当前主色派生半透明底 —— 主色是运行时变量，
+ * 写死一个深色值会在换主色后与强调色脱节；同时 JS 在深色下不写内联值，
+ * 这条才能生效（见 src/lib/ui-prefs.tsx）。
+ */
+[data-theme='dark'] {
+  --bg: #131318;
+  --bg-soft: #1e1e26;
+  --surface: #1a1a21;
+  --ink: #ececf3;
+  --ink-soft: #c3c3cf;
+  --muted: #9b9ba9;
+  --line: #2a2a34;
+  --line-strong: #3a3a46;
+  --accent-soft: color-mix(in srgb, var(--accent) 26%, transparent);
+  --on-accent-soft: #e9e7ff;
+  --topbar-bg: rgba(26, 26, 33, 0.82);
+  --notice-warn-bg: #2c2318;
+  --bubble-error-bg: #33161f;
+  --bubble-error-ink: #ffb3c4;
+  --swatch-ring: rgba(255, 255, 255, 0.22);
+  --code-bg: #0e0e13;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.36);
+  color-scheme: dark;
 }
 
 * {
@@ -120,7 +154,7 @@ pre {
   align-items: center;
   gap: 10px;
   padding: 0 20px;
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--topbar-bg);
   backdrop-filter: saturate(180%) blur(12px);
   border-bottom: 1px solid var(--line);
 }
@@ -156,34 +190,52 @@ pre {
 .home {
   max-width: 920px;
   margin: 0 auto;
-  padding: 34px 22px 80px;
+  padding: 40px 22px 80px;
 }
 
 .hero {
   text-align: center;
-  margin: 18px 0 26px;
+  margin: 0 auto 26px;
+  max-width: 720px;
 }
 
 .hero h1 {
-  margin: 0 0 12px;
-  font-size: clamp(30px, 4.4vw, 46px);
-  line-height: 1.18;
-  letter-spacing: -0.025em;
+  margin: 0 0 14px;
+  font-size: clamp(30px, 4.2vw, 44px);
+  line-height: 1.24;
+  letter-spacing: -0.03em;
   font-weight: 720;
+  text-wrap: balance;
 }
 
 .hero h1 em {
   font-style: normal;
   color: var(--accent);
   background: linear-gradient(transparent 62%, var(--accent-soft) 0);
+  /* 强调短语不该被断行拆成"能用的"+"应用" */
+  white-space: nowrap;
 }
 
+/*
+ * 副标题不再用 <br> 强行断句：窄屏上硬换行会切出"随时能退回上一版。"这种孤行。
+ * 交给 max-width + text-wrap: pretty 自己找平衡点。
+ */
 .hero .hero-sub {
   margin: 0 auto;
-  max-width: 620px;
+  max-width: 600px;
   font-size: 14px;
   line-height: 1.8;
   color: var(--muted);
+  text-wrap: pretty;
+}
+
+.hero .hero-sub + .hero-sub {
+  margin-top: 4px;
+}
+
+.hero .hero-sub strong {
+  color: var(--ink-soft);
+  font-weight: 600;
 }
 
 .composer {
@@ -227,17 +279,45 @@ pre {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(252px, 1fr));
+  gap: 14px;
 }
 
 .project-card {
   cursor: pointer;
+  display: flex;
+  flex-direction: column;
   transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
 }
 
 .project-card .ant-card-body {
   padding: 14px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 2px;
+}
+
+/*
+ * 标题独占一行：以前徽章挤在同一行，把名字压成 "Ho…"。
+ * 徽章与元信息下次行，名称优先拿到宽度。
+ */
+.project-card .card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.project-card .card-model {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.project-card .card-foot {
+  margin-top: auto;
+  padding-top: 10px;
 }
 
 .project-card:hover {
@@ -307,7 +387,7 @@ pre {
 
 .msg.user .bubble {
   background: var(--accent-soft);
-  color: #2a2470;
+  color: var(--on-accent-soft);
 }
 
 .msg .bubble.pending {
@@ -315,8 +395,8 @@ pre {
 }
 
 .msg.error .bubble {
-  background: #fdecef;
-  color: #93304a;
+  background: var(--bubble-error-bg);
+  color: var(--bubble-error-ink);
 }
 
 .plan-card .ant-card-head {
@@ -369,7 +449,7 @@ pre {
 
 .run-notice.warn {
   color: var(--warn);
-  background: #fdf4e7;
+  background: var(--notice-warn-bg);
 }
 
 .check-list {
@@ -568,7 +648,7 @@ pre {
   padding: 0;
   flex: none;
   border-radius: 50%;
-  border: 1px solid rgba(20, 20, 26, 0.14);
+  border: 1px solid var(--swatch-ring);
   cursor: pointer;
   transition: transform 0.14s ease, box-shadow 0.14s ease;
 }
@@ -738,7 +818,7 @@ pre {
 /* -------------------------------- 设置 ---------------------------------- */
 
 .settings {
-  max-width: 860px;
+  max-width: 880px;
   margin: 0 auto;
   padding: 26px 22px 60px;
   display: flex;
@@ -746,24 +826,63 @@ pre {
   gap: 16px;
 }
 
+/* 当前生效通道：一条软底带子，比塞在按钮旁边的一行小字更好找 */
+.channel-band {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: var(--bg-soft);
+}
+
+.channel-band .dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.channel-band .dot.idle {
+  background: var(--warn);
+}
+
+.channel-mode {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
 .provider-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
   gap: 10px;
 }
 
+/*
+ * 通道卡片不再是 antd Card：标题行 / 模型名 / 说明 / 动作四段等距排列，
+ * 同一行里的卡片高度必须一致，否则截图中"有的卡片高、有的矮"。
+ */
 .provider-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 12px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: left;
   cursor: pointer;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
 }
 
-.provider-card .ant-card-head {
-  min-height: 0;
-  padding: 9px 12px;
-}
-
-.provider-card .ant-card-body {
-  padding: 9px 12px;
+.provider-card:hover {
+  border-color: var(--line-strong);
 }
 
 .provider-card.is-on {
@@ -771,9 +890,84 @@ pre {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.provider-card.is-off {
-  opacity: 0.62;
-  cursor: not-allowed;
+/* 「自带 Key」预填自这张卡片：虚线边框区别于"已选中"，不抢选中态 */
+.provider-card.is-source {
+  border-color: var(--accent);
+  border-style: dashed;
+}
+
+.provider-card .prov-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.provider-card .prov-model {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.provider-card .prov-note {
+  font-size: 11.5px;
+  line-height: 1.62;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 38px;
+}
+
+.provider-card .prov-foot {
+  margin-top: auto;
+  padding-top: 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.provider-card.is-on .prov-foot .prov-cta {
+  color: var(--accent);
+  font-weight: 550;
+}
+
+.provider-card .prov-key-link {
+  padding: 0;
+  height: auto;
+  font-size: 11.5px;
+}
+
+/* 自带 Key 的三项里，模型名与 Key 并排；窄屏回到单列 */
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 14px;
+}
+
+@media (max-width: 640px) {
+  .form-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
+
+/* 设置页的色卡比工作台里的微调色卡更大：这里是"选一个品牌色"，点得中更重要 */
+.swatches {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.swatch-lg {
+  width: 26px;
+  height: 26px;
 }
 
 /* -------------------------------- 分享 ---------------------------------- */

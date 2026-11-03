@@ -122,10 +122,10 @@ export function HomePage() {
             <br />
             得到一个<em>能用的应用</em>
           </h1>
+          <Paragraph className="hero-sub">描述你的想法，Agent 会先给方案、再逐文件写代码，然后直接在沙箱里跑起来。</Paragraph>
+          <Paragraph className="hero-sub">不满意就继续说，随时能退回上一版。</Paragraph>
           <Paragraph className="hero-sub">
-            描述你的想法，Agent 会先给方案、再逐文件写代码，然后直接在沙箱里跑起来。 不满意就继续说，随时能退回上一版。
-            <br />
-            代码由<strong>真实大模型</strong>生成，默认走免 Key 通道，无需注册；也可以换成你自己的模型 Key。
+            代码由<strong>真实大模型</strong>生成，默认走免 Key 通道，无需注册，也可以换成自己的模型 Key。
           </Paragraph>
         </div>
 
@@ -239,22 +239,23 @@ export function HomePage() {
                   }
                 }}
               >
-                <Flex align="center" gap={6}>
-                  <Text strong ellipsis style={{ fontSize: 15, minWidth: 0 }}>
+                <div className="card-title">
+                  <Text strong ellipsis style={{ fontSize: 15, flex: 1, minWidth: 0 }}>
                     {project.name}
                   </Text>
-                  <div className="spacer" />
                   {project.createdBy === me ? <Badge tone="accent">我创建的</Badge> : null}
-                  <Badge>{project.providerLabel || '模型生成'}</Badge>
-                </Flex>
-                <Paragraph type="secondary" ellipsis={{ rows: 2 }} style={{ margin: '8px 0 12px', fontSize: 12.5 }}>
+                </div>
+                <Text type="secondary" className="card-model mono" ellipsis>
+                  {project.providerLabel || '模型生成'}
+                </Text>
+                <Paragraph type="secondary" ellipsis={{ rows: 2 }} style={{ margin: '6px 0 0', fontSize: 12.5 }}>
                   {project.summary || '还没有描述'}
                 </Paragraph>
-                <Flex align="center" gap={6}>
+                <Flex className="card-foot" align="center" gap={6}>
                   <Badge tone="accent">v{project.version || 0}</Badge>
                   <Badge>{project.fileCount} 文件</Badge>
                   <div className="spacer" />
-                  <Text type="secondary" style={{ fontSize: 11.5 }}>
+                  <Text type="secondary" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
                     {timeAgo(project.updatedAt)}
                   </Text>
                   {/* 项目带着全部版本历史，删掉无法恢复：用二次确认换掉原来的「再点一次」状态机 */}
