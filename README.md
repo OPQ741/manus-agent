@@ -28,7 +28,7 @@ Nucleus 不是一个套壳聊天框。它把「Agent 生成应用」拆成一条
                             └────────────────────────────────┘
 ```
 
-**所有代码都由真实外部大模型生成**，没有任何"本地模板兜底"：默认走免 Key 通道，访客无需注册、无需填任何东西就能生成；服务端预设了 7 家模型通道，部署者用环境变量就能换主力；访客也可以在 `/settings` 填自己的 Key，填了就只对他自己生效。
+**所有代码都由真实外部大模型生成**，没有任何"本地模板兜底"：默认走免 Key 通道，访客无需注册、无需填任何东西就能生成；服务端预设了 9 家模型通道，部署者用环境变量就能换主力；访客也可以在 `/settings` 填自己的 Key，填了就只对他自己生效。
 
 打开链接后按这 6 步走一遍，就是这个 Demo 想让你看到的全部闭环：
 
@@ -88,10 +88,10 @@ npm start          # 自动 build，监听 http://localhost:8787
 | 方式               | 怎么做                                                                                                                | 生效范围             |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------- | -------------------- |
 | ① 自带 Key         | 在 `/settings` 点「更换模型」→「自定义接入」：选常用服务商（自动填地址）→ 粘 Key →「拉取列表」选模型 → 保存并使用        | 存在服务端，当前是**全局一份**（见下方说明）       |
-| ② 服务端预设       | 给环境变量 `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` / `MOONSHOT_API_KEY` / `ZHIPU_API_KEY` / `OPENROUTER_API_KEY` / `SILICONFLOW_API_KEY`，再用 `NUCLEUS_PROVIDER=deepseek` 指定主力 | 所有未自带 Key 的访客 |
+| ② 服务端预设       | 给环境变量 `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` / `MOONSHOT_API_KEY` / `ZHIPU_API_KEY` / `OPENROUTER_API_KEY` / `SILICONFLOW_API_KEY` / `ALIYUN_API_KEY` / `DOTS_API_KEY`，再用 `NUCLEUS_PROVIDER=deepseek` 指定主力 | 所有未自带 Key 的访客 |
 | ③ 零配置（默认）   | 什么都不填，走内置免 Key 通道 `pollinations`（GPT-OSS 20B）                                                            | 所有访客             |
 
-内置 7 条预设（`server/agent/providers.ts`），要改模型名、加自家网关或摘掉某一家，编辑 `config/providers.json` 即可（同 id 逐字段合并；Key 请放 `data/providers.local.json`，该文件已 gitignore）。**改完不用重启**：服务端按文件 mtime 检测变更，下一次请求就用新目录；关掉的那条、写坏的 JSON、指向不存在的 `default` 都会在设置页顶部以警告列出来，不再静默忽略。
+内置 9 条预设（`server/agent/providers.ts`），要改模型名、加自家网关或摘掉某一家，编辑 `config/providers.json` 即可（同 id 逐字段合并；Key 请放 `data/providers.local.json`，该文件已 gitignore）。**改完不用重启**：服务端按文件 mtime 检测变更，下一次请求就用新目录；关掉的那条、写坏的 JSON、指向不存在的 `default` 都会在设置页顶部以警告列出来，不再静默忽略。
 
 | id             | 默认模型                          | 候选模型（设置页可直接换）        | 需要 Key            |
 | -------------- | --------------------------------- | --------------------------------- | ------------------- |
@@ -102,6 +102,13 @@ npm start          # 自动 build，监听 http://localhost:8787
 | `zhipu`        | `glm-4.5-air`                     | glm-4.5-air / 4.5 / 4.5-flash     | `ZHIPU_API_KEY`     |
 | `openrouter`   | `deepseek/deepseek-chat`          | 任选一家（Claude / Gemini / Qwen…）| `OPENROUTER_API_KEY`|
 | `siliconflow`  | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | Qwen3-Coder / Qwen3-235B / DeepSeek-V3 | `SILICONFLOW_API_KEY` |
+| `aliyun`       | `qwen3.8-flash`（百炼 Qwen3.8）    | qwen3.8-flash / qwen3.8-max / qwen3.8-27b | `ALIYUN_API_KEY` |
+| `dots`         | `dots3-note-prev`（小红书 Dots）  | dots3-note-prev                   | `DOTS_API_KEY`      |
+
+> **`aliyun` 与 `dots` 的两个特殊之处**（2026-11-03 实测）：
+> - 两者都是**思考型**模型，推理链与正文共享 `max_tokens` 预算。预设里固定 `reasoningEffort: low` —— 实测阿里云不压强度时推理单独就吃掉一部分预算，正文容易写不满被截断。
+> - `dots` 的官方鉴权头是 `api-key: <key>` 而不是标准的 `Authorization: Bearer`。预设声明了 `authHeader`，客户端会**双发两头**（Bearer + `api-key`），实测两头都通，不用赌上游认哪种。
+> - `dots` 官方限流 RPM 30，预设带 `minIntervalMs: 2100` 让并发压成串行，避免整排 429。
 
 `models` 只是**起点候选**，不是白名单：设置页里「拉取列表」会直接问上游 `GET {baseUrl}/models`（`POST /api/settings/models`），上游上了新模型不必回来改这张表；预设里没有的服务商，走「自定义接入」填三个字段即可。
 
@@ -164,7 +171,7 @@ npm run key -- --id mygw --url https://your-gateway/v1 --model coder --key sk-xx
 - **统一事件模型**：`AgentEvent`（stage / note / notice / plan / file_start / file_delta / file_end / delete / check / warning / done / error）是后端、SSE 传输、前端 reducer、测试断言共用的唯一契约。
 - **模型通道解析链**：`server/agent/providers.ts` 是 7 条内置预设的目录 + Key 解析（env > 本地文件 > 仓库文件）；`resolveChain()` 按「访客自带 Key → 点名预设 → 服务端主力 → 免 Key 兜底」产出尝试顺序，未就绪的不进链，全链为空就 412 —— 绝不退回"假装生成"。
 - **配额闸门**：`server/agent/queue.ts` 按提供方的 `minIntervalMs` 把并发压成 FIFO 串行（免 Key 通道实测 30 秒 1 次）；预计等待超过 90 秒直接换下一家，且被拒的请求不推进队首，不会把后面的人一起推后。
-- **故障转移**：错误码属于「这家不行」（鉴权 / 限流 / 网络 / 超时 / 没按协议出码）**且本轮还没有任何产出**时才换下一家；已经吐了一半绝不换，否则两份代码会互相覆盖。换家发 `notice(warn)`，只有终态失败才发 `error`。
+- **故障转移**：错误码属于「这家不行」（鉴权 / 限流 / 网络 / 超时 / 没按协议出码）**且本轮还没有任何产出**时才换下一家；已经吐了一半绝不换，否则两份代码会互相覆盖。换家发 `notice(warn)`，只有终态失败才发 `error`。**换家的顺序是「主力 → 其他带 Key 的通道 → 免 Key 通道」**：免 Key 通道有 30 秒/IP 的硬配额，它是最后才用的选项，不是"第一家挂了马上顶上"的那个。
 - **修复轮**：assemble 之后如果发现①被引用但没输出的文件 ②闭合标签没等到的截断文件 ③语法不通的脚本，就再问模型一次，**只**重发这几个文件并带上具体原因（最多 2 轮，用量跨轮累计）。真实模型一轮就犯过这个错：`app.js` 的字符串没闭合，结构检查全绿、应用一打开白屏。
 - **语法闸门自检**：`scriptSyntax()` 用 `new Function` 只编译不执行，把"写到一半"的脚本判成阻断级失败——这是唯一能拦住静默白屏的检查。
 - **中断保留**：点「停止」时连接不关，服务端中断引擎后把**正常闭合**的文件提交为新版本（写了一半的回退到旧版），并用 `done{partial:true}` 回传确认。
@@ -182,7 +189,7 @@ server/index.ts             路由 / SSE / 解析链编排 / 排队 / 故障转�
 server/agent/providers.ts   模型通道目录 + Key 解析 + 解析链
 server/agent/queue.ts       按提供方的配额闸门
 server/agent/protocol.ts    NWF 增量状态机
-server/agent/llm.ts         OpenAI 兼容 SSE + max_tokens/推理强度 + 429 + SSRF 防护
+server/agent/llm.ts         OpenAI 兼容 SSE + max_tokens/推理强度 + 429 + SSRF 防护 + 额外鉴权头（api-key）
 server/agent/prompts.ts     协议契约 · 设计令牌契约 · 迭代上下文 · 修复轮提示词
 server/agent/runner.ts      ModelEngine 单实现 + 事件归一 + 换家判据
 server/preview/assemble.ts  内联组装 + 沙箱桥 + storage shim + 语法闸门
@@ -219,7 +226,7 @@ src/pages/Settings.tsx      模型通道选择 + 自带 Key + 设计参数
 
 | 接缝     | 接口                                         | 现在                          | 升级到                        | 要改什么                                        |
 | -------- | -------------------------------------------- | ----------------------------- | ----------------------------- | ----------------------------------------------- |
-| 生成层   | `AgentEngine` / 提供方目录                   | 单一 `ModelEngine` + 7 条预设 | 真多 Agent 编排、多模型并行   | 新增实现或加预设，runner 聚合事件；上层无感     |
+| 生成层   | `AgentEngine` / 提供方目录                   | 单一 `ModelEngine` + 9 条预设 | 真多 Agent 编排、多模型并行   | 新增实现或加预设，runner 聚合事件；上层无感     |
 | 执行层   | `assemble(files) → {html, checks, warnings}` | 纯前端内联组装      | E2B / WebContainer / 真子进程 | 只换 `PreviewPanel` 与 `assemble`；事件模型不变 |
 | 持久化层 | `Store`                                      | 单文件 JSON         | Postgres / Supabase           | 实现同样的 8 个方法                             |
 
@@ -245,7 +252,7 @@ src/pages/Settings.tsx      模型通道选择 + 自带 Key + 设计参数
 ## 测试
 
 ```bash
-npm test             # 单元 + 集成：174 passed
+npm test             # 单元 + 集成：194 passed
 npm run typecheck    # tsc --noEmit：0 error
 npm run make:factory # 用真实模型重新生成出厂示例（产物不合格会拒绝写入）
 npm run e2e          # 真实 Chrome 浏览器 14 步（需先 npm start）
@@ -253,10 +260,12 @@ npm run e2e          # 真实 Chrome 浏览器 14 步（需先 npm start）
 
 | 层   | 覆盖                                                                                                                                                              | 结果       |
 | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| 单元 | 协议 25 · 模型通道与配额闸门 26 · 上下文 14 · 组装与语法闸门 22 · 存储 14 · 微调 12 · 错误映射 7 · ZIP 7 · 传输契约 12                                            | ✅ 139     |
-| 集成 | HTTP 全链路 35：全部经**假上游模型**走真实 HTTP + SSE + 协议解析（自带 Key 优先、401→llm_auth、故障转移、排队、修复轮 ×3、SSRF、并发 409、停止保留、回滚、导出、分享、微调三处一致 + 清空落库、读接口方法校验、HEAD） | ✅ 35      |
+| 单元 | 协议 25 · 模型通道与配额闸门 37 · 上下文 14 · 组装与语法闸门 22 · 存储 14 · 微调 12 · 错误映射 7 · ZIP 7 · 传输契约 12 · 请求头组装 6                        | ✅ 156     |
+| 集成 | HTTP 全链路 38：全部经**假上游模型**走真实 HTTP + SSE + 协议解析（自带 Key 优先、401→llm_auth、故障转移、排队、修复轮 ×3、SSRF、并发 409、停止保留、回滚、导出、分享、微调三处一致 + 清空落库、读接口方法校验、HEAD） | ✅ 38      |
 | E2E  | 生成 → 交互 → 刷新持久 → 迭代 → 自愈 → 回滚 → 导出 → 分享 → 移动端 → 停止保留 → 设计微调 → 恢复默认不回退 → 设置页通道选择                                          | ⚠️ 14 步需在**本机**跑（沙箱内无法启动 Chrome） |
 | 类型 | `tsc --noEmit`（strict + noUnusedLocals）                                                                                                                         | ✅ 0 error |
+
+本轮接入阿里云百炼与小红书 Dots 后，另做了**真实上游**的端到端验证（非假上游）：两家各跑一次完整生成（NWF 协议、逐文件流式、assemble 自检、落库），产物 3 文件 / 8 项自检全绿；并实测「主力 Key 失效 → 自动切到下一家有 Key 的通道 → 免 Key 通道兜底」的完整故障转移链。
 
 另有本轮交付前跑的一次**真实 HTTP 审计**：对 `npm run build` 的产物起服务，逐条打 39 项断言（含一次 41.6 秒的真实免 Key 生成与一次出厂示例校验），39/39 通过。该审计脚本是临时工具、未入库，可复现路径是 `npm start` + `npm run e2e`。
 

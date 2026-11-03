@@ -118,7 +118,7 @@
 
 - **模型通道选择**（三段）：`自动`（交给服务端解析链，默认）/ `我的 Key`（自带 Base URL + 模型名 + Key，只对这个浏览器生效）/ **预设卡片网格**（`ready` 为假的卡片禁用，并在 `title` 与卡片上给出 `keyEnv` 与申请链接）；
 - **解析链**（按尝试顺序）：① 访客自带 Key（id=`custom`）② 点名的预设 ③ 服务端目录（主力在前）④ 免 Key 通道永远兜底；没配 Key 的预设不进链。主力顺序：`NUCLEUS_PROVIDER` > 配置文件 `default` > 内联 `env` > `pollinations`；
-- **内置通道**：1 条免 Key（`pollinations` · GPT-OSS 20B · `maxTokens 12000` · `reasoningEffort low` · 最小间隔 31 秒）+ 6 条需要 Key 的 OpenAI 兼容预设（DeepSeek / Gemini / Kimi / 智谱 / OpenRouter / 硅基流动）；接自家网关在 `config/providers.json` 追加一条，或用 `NUCLEUS_LLM_BASE_URL` + `NUCLEUS_LLM_MODEL`（+ `NUCLEUS_LLM_API_KEY` / `NUCLEUS_LLM_FREE=1`）合成 id=`env`；
+- **内置通道**：1 条免 Key（`pollinations` · GPT-OSS 20B · `maxTokens 12000` · `reasoningEffort low` · 最小间隔 31 秒）+ 8 条需要 Key 的 OpenAI 兼容预设（DeepSeek / Gemini / Kimi / 智谱 / OpenRouter / 硅基流动 / 阿里云百炼 / 小红书 Dots）；接自家网关在 `config/providers.json` 追加一条，或用 `NUCLEUS_LLM_BASE_URL` + `NUCLEUS_LLM_MODEL`（+ `NUCLEUS_LLM_API_KEY` / `NUCLEUS_LLM_FREE=1`）合成 id=`env`；
 - **Key 来源优先级**：环境变量（预设声明的 `keyEnv`，如 `DEEPSEEK_API_KEY`）> `data/providers.local.json`（已 gitignore，可放 Key）> `config/providers.json`（可入库，只调整目录结构）。服务端只回显「已配置」；
 - 接口面：`GET /api/settings` 返回 `providers[]`（id / label / model / baseUrl / free / ready / isDefault / keyUrl / note / keyEnv）与 `active{ id, label, model, free }`，**不含任何 Key**；`PUT /api/settings` 的 `provider` 取 `''`（自动）/ `'custom'` / 预设 id，`apiKey` 传空串 = 清除、不传 = 保持；
 - 「测试连接」按钮：发一条极短请求，测的是**解析链的第一个通道**，返回延迟、模型名与实际 `provider`；「清除我的 Key」把自带 Key 置空并交回服务端通道；部署后可以先看 `GET /api/health`——它返回主力 `provider` 与就绪通道 `providers[]`；

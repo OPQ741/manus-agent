@@ -105,6 +105,7 @@ async function verify(config: {
   apiKey: string
   model: string
   headers?: Record<string, string>
+  authHeader?: string
 }): Promise<{ ok: boolean; detail: string }> {
   try {
     const result = await testConnection({
@@ -112,6 +113,7 @@ async function verify(config: {
       apiKey: config.apiKey,
       model: config.model,
       headers: config.headers,
+      authHeader: config.authHeader,
       temperature: 0,
     })
     return { ok: true, detail: `${result.ms}ms · 返回「${result.sample || '(空)'}」` }
@@ -171,6 +173,7 @@ async function runTest(): Promise<void> {
       apiKey: entry.apiKey,
       model: entry.profile.model,
       headers: entry.profile.headers,
+      authHeader: entry.profile.authHeader,
     })
     if (result.ok) {
       console.log(`  ${entry.profile.id.padEnd(13)} ${C.green('通')}  ${C.dim(result.detail)}`)
@@ -197,7 +200,12 @@ async function showModels(id: string): Promise<void> {
   }
   const { listModels } = await import('../server/agent/llm')
   try {
-    const models = await listModels({ baseUrl: entry.profile.baseUrl, apiKey: entry.apiKey, headers: entry.profile.headers })
+    const models = await listModels({
+      baseUrl: entry.profile.baseUrl,
+      apiKey: entry.apiKey,
+      headers: entry.profile.headers,
+      authHeader: entry.profile.authHeader,
+    })
     console.log(`\n${C.bold(entry.profile.label)} 可用模型（${models.length}）\n`)
     for (const model of models) console.log(`  ${model}`)
     console.log(`\n${C.dim('换模型：npm run key -- ')}${id}${C.dim(' <Key> --model <上面的某个>')}\n`)
@@ -242,7 +250,13 @@ async function setKey(id: string, apiKey: string): Promise<void> {
   console.log(`  ${C.dim('Key ')} ${mask(apiKey)}\n`)
 
   process.stdout.write(`验证中…`)
-  const result = await verify({ baseUrl, apiKey, model, headers: entry.profile.headers })
+  const result = await verify({
+    baseUrl,
+    apiKey,
+    model,
+    headers: entry.profile.headers,
+    authHeader: entry.profile.authHeader,
+  })
   process.stdout.write('\r' + ' '.repeat(30) + '\r')
 
   if (!result.ok) {

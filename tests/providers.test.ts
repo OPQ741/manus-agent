@@ -165,6 +165,15 @@ describe('providers · 配置来源与优先级', () => {
     expect(view).not.toContain('sk-secret-value')
     expect(view).toContain('DEEPSEEK_API_KEY')
   })
+
+  it('UT-PRV-12b 目录视图不泄露 Key，也不泄露裸 Key 鉴权头的值', async () => {
+    await writeConfig({ providers: [{ id: 'dots', apiKey: 'ak-secret-value', authHeader: 'api-key' }] })
+    const catalog = await buildCatalog({ dataDir: dir, configFile, env: {} })
+    const view = JSON.stringify(catalogView(catalog))
+    expect(view).not.toContain('ak-secret-value')
+    // authHeader 是公开的机制名，可以出现；Key 的值不行
+    expect(view).not.toContain('api-key:')
+  })
 })
 
 describe('providers · 解析链', () => {
@@ -212,6 +221,28 @@ describe('providers · 解析链', () => {
     expect(isReady({ ...base, free: true }, '')).toBe(true)
     expect(isReady({ ...base, free: false }, '')).toBe(false)
     expect(isReady({ ...base, free: false }, 'k')).toBe(true)
+  })
+
+  it('UT-PRV-17b 免 Key 通道永远排在链尾：主力挂掉时先试别的 Key 通道', async () => {
+    // 背景：免 Key 通道有 30 秒/IP 的硬配额，是"最后才用"的选项。
+    // 它在目录里排第一（写在一起方便看），若照目录顺序进链，主力一挂
+    // 就会先撞上配额通道，而不是先试下一家真正有 Key 的通道。
+    const catalog = await buildCatalog({
+      dataDir: dir,
+      configFile,
+      env: { ALIYUN_API_KEY: 'sk-a', DOTS_API_KEY: 'ak-d', NUCLEUS_PROVIDER: 'aliyun' },
+    })
+    const chain = resolveChain(catalog)
+    const ids = chain.map((item) => item.profile.id)
+    // 带 Key 的通道都在前面，免 Key 的在最后
+    expect(ids.indexOf('dots')).toBeLessThan(ids.indexOf('pollinations'))
+    expect(ids[ids.length - 1]).toBe('pollinations')
+  })
+
+  it('UT-PRV-17c 点名免 Key 通道时它仍然可用（不被挪走）', async () => {
+    const catalog = await buildCatalog({ dataDir: dir, configFile, env: {} })
+    const chain = resolveChain(catalog, { provider: 'pollinations' })
+    expect(chain[0]?.profile.id).toBe('pollinations')
   })
 })
 

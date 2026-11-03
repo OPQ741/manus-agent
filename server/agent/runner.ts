@@ -107,6 +107,7 @@ export class ModelEngine implements AgentEngine {
       temperature: provider.profile.temperature,
       reasoningEffort: provider.profile.reasoningEffort,
       headers: provider.profile.headers,
+      authHeader: provider.profile.authHeader,
     }
   }
 

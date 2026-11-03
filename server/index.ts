@@ -729,10 +729,16 @@ export async function createNucleusServer(options: ServerOptions = {}) {
         const current = store.getSettings()
         const named = body.provider && body.provider !== 'custom' ? (await getCatalog()).entries.find((entry) => entry.profile.id === body.provider) : undefined
 
-        let target: { baseUrl: string; apiKey: string; headers?: Record<string, string>; source: string }
+        let target: { baseUrl: string; apiKey: string; headers?: Record<string, string>; authHeader?: string; source: string }
         if (named) {
           if (!named.ready) throw new HttpError(412, 'provider_unavailable', `「${named.profile.label}」还没有 Key，先填 Key 再拉列表`)
-          target = { baseUrl: named.profile.baseUrl, apiKey: named.apiKey, headers: named.profile.headers, source: named.profile.label }
+          target = {
+            baseUrl: named.profile.baseUrl,
+            apiKey: named.apiKey,
+            headers: named.profile.headers,
+            authHeader: named.profile.authHeader,
+            source: named.profile.label,
+          }
         } else {
           const rawBase = (body.baseUrl ?? current.baseUrl).trim()
           if (!rawBase) throw new HttpError(400, 'bad_request', '先填 Base URL')
@@ -766,7 +772,14 @@ export async function createNucleusServer(options: ServerOptions = {}) {
         const current = store.getSettings()
         const wantsDraft = Boolean(body.baseUrl?.trim() || body.model?.trim() || body.apiKey?.trim())
 
-        let target: { baseUrl: string; apiKey: string; model: string; label: string; headers?: Record<string, string> }
+        let target: {
+          baseUrl: string
+          apiKey: string
+          model: string
+          label: string
+          headers?: Record<string, string>
+          authHeader?: string
+        }
         if (wantsDraft) {
           const guard = validateBaseUrl((body.baseUrl ?? current.baseUrl).trim())
           if (!guard.ok) throw new HttpError(400, 'bad_request', guard.reason)
@@ -788,6 +801,7 @@ export async function createNucleusServer(options: ServerOptions = {}) {
             apiKey: first.apiKey,
             label: first.profile.id,
             headers: first.profile.headers,
+            authHeader: first.profile.authHeader,
           }
         }
 
@@ -799,6 +813,7 @@ export async function createNucleusServer(options: ServerOptions = {}) {
             maxTokens: 32,
             temperature: 0,
             headers: target.headers,
+            authHeader: target.authHeader,
           })
           sendJson(res, 200, {
             ok: true,

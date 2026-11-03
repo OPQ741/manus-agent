@@ -52,6 +52,16 @@ export interface ProviderProfile {
   reasoningEffort?: 'high' | 'medium' | 'low'
   /** 额外请求头（有些网关要求 HTTP-Referer / 署名之类） */
   headers?: Record<string, string>
+  /**
+   * 额外的鉴权头名：把 Key 以**裸值**放进这个头（不带 `Bearer ` 前缀）。
+   *
+   * 为什么需要：绝大多数 OpenAI 兼容网关认 `Authorization: Bearer <key>`，
+   * 但小红书 Dots 的官方接口认的是 `api-key: <key>` —— 只发 Bearer 会 401。
+   *
+   * 这里刻意**保留** Bearer 头、额外再发一个：实测这两个头都通，
+   * 双发既兼容标准客户端，也不会因为上游收紧某种形式而直接挂掉。
+   */
+  authHeader?: string
   /** 排队用的最小请求间隔（毫秒）：免 Key 通道靠它把并发压成串行而不是 429 */
   minIntervalMs?: number
   /** 申请 Key 的入口，设置页给访客看 */
@@ -180,6 +190,41 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     note: '注册送额度，国内可达',
     builtin: true,
   },
+  {
+    id: 'aliyun',
+    label: '阿里云百炼 · Qwen3.8',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen3.8-flash',
+    models: ['qwen3.8-flash', 'qwen3.8-max', 'qwen3.8-27b', 'qwen3.7-flash', 'qwen3.7-plus'],
+    keyEnv: 'ALIYUN_API_KEY',
+    maxTokens: 8192,
+    temperature: 0.4,
+    // qwen3.8 是思考型模型：推理链与正文共享 max_tokens 预算。
+    // 实测不压强度时 reasoning 单独就吃掉一部分预算，正文容易写不满被截断。
+    reasoningEffort: 'low',
+    keyUrl: 'https://bailian.console.aliyun.com/',
+    note: '百炼专属接入点，国内直连',
+    builtin: true,
+  },
+  {
+    id: 'dots',
+    label: '小红书 Dots · dots3-note',
+    baseUrl: 'https://note3-prev-api.askdiandian.com/v1',
+    model: 'dots3-note-prev',
+    models: ['dots3-note-prev'],
+    keyEnv: 'DOTS_API_KEY',
+    maxTokens: 8192,
+    temperature: 0.4,
+    // 同上：深度思考默认开着，不压强度推理会吃掉输出预算。
+    reasoningEffort: 'low',
+    // 官方文档写的是 `api-key` 头而不是 `Authorization: Bearer`，双发两头最稳。
+    authHeader: 'api-key',
+    // 官方限流 RPM 30，按最小间隔把并发压成串行，避免整排 429。
+    minIntervalMs: 2_100,
+    keyUrl: 'https://dots.ai/platform/apikeys',
+    note: '512K 上下文，预览期免费',
+    builtin: true,
+  },
 ]
 
 /** 免 Key 通道永远排在解析链最后兜底。 */
@@ -198,6 +243,8 @@ export interface CatalogFileEntry {
   temperature?: number
   reasoningEffort?: 'high' | 'medium' | 'low'
   headers?: Record<string, string>
+  /** 额外的裸 Key 鉴权头（如小红书 Dots 的 `api-key`） */
+  authHeader?: string
   minIntervalMs?: number
   keyUrl?: string
   note?: string
@@ -294,6 +341,7 @@ function mergeProfile(base: ProviderProfile, patch: CatalogFileEntry): ProviderP
   if (patch.temperature !== undefined) next.temperature = patch.temperature
   if (patch.reasoningEffort !== undefined) next.reasoningEffort = patch.reasoningEffort
   if (patch.headers) next.headers = { ...(base.headers ?? {}), ...patch.headers }
+  if (patch.authHeader !== undefined) next.authHeader = patch.authHeader || undefined
   if (patch.minIntervalMs !== undefined) next.minIntervalMs = patch.minIntervalMs
   if (patch.keyUrl) next.keyUrl = patch.keyUrl
   if (patch.note) next.note = patch.note
@@ -402,6 +450,7 @@ export async function buildCatalog(options: BuildCatalogOptions = {}): Promise<R
       temperature: patch.temperature ?? 0.4,
       reasoningEffort: patch.reasoningEffort,
       headers: patch.headers,
+      authHeader: patch.authHeader,
       minIntervalMs: patch.minIntervalMs,
       keyUrl: patch.keyUrl,
       note: patch.note,
@@ -543,9 +592,23 @@ export function resolveChain(catalog: ResolvedCatalog, user: UserUpstream = {}):
     const override = user.modelOverride?.trim()
     push(override ? { ...named.profile, model: override } : named.profile, named.apiKey)
   }
-  for (const entry of catalog.entries) push(entry.profile, entry.apiKey)
+
+  // 目录顺序里，免 Key 通道是**第一个**（它是默认兜底，写在目录开头方便看）。
+  // 但它有 30 秒/IP 的硬配额，是"最后才用"的选项 —— 而带 Key 的通道才是真正该先试的。
+  //
+  // 以前这里直接按目录顺序 push，于是免 Key 通道总是排在带 Key 通道前面：
+  // 主力挂掉时先撞上配额通道，而不是先试下一家真正能用的 Key 通道。
+  // 现在把免 Key 通道统一挪到链尾，让「主力 → 其他 Key 通道 → 免 Key兜底」成立。
+  const rest = catalog.entries.filter((entry) => !isFreeProfile(entry.profile))
+  const freeEntries = catalog.entries.filter((entry) => isFreeProfile(entry.profile))
+  for (const entry of [...rest, ...freeEntries]) push(entry.profile, entry.apiKey)
 
   return chain
+}
+
+/** 免 Key 通道：没有 Key 也能调，但配额紧，是链上最后一个选项。 */
+function isFreeProfile(profile: ProviderProfile): boolean {
+  return Boolean(profile.free)
 }
 
 /** 给 UI 的目录视图：永远不含 Key。形状由 shared/types 定，这里只负责填。 */

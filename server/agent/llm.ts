@@ -29,6 +29,38 @@ export interface LlmConfig {
   reasoningEffort?: 'high' | 'medium' | 'low'
   /** 部分网关要求署名头（OpenRouter 的 http-referer / x-title） */
   headers?: Record<string, string>
+  /**
+   * 额外的鉴权头：Key 以裸值放进这个头，同时保留标准的 Bearer 头。
+   *
+   * 小红书 Dots 官方只认 `api-key: <key>`，标准 Bearer 形式它也接受，
+   * 但接口文档明确写的是前者 —— 双发两头就不用赌上游认哪种。
+   */
+  authHeader?: string
+}
+
+/**
+ * 组装请求头。
+ *
+ * 抽出来是因为三处要用（发消息 / 拉模型列表 / 连通性测试），
+ * 而认证头的差异正是最容易在某一处漏掉的地方。
+ *
+ * 导出是为了能直接单测：认证头错一个字符，症状是上游 401，
+ * 而 401 在整条链上表现为"这家不行"——排查起来绕远路。
+ */
+export function buildHeaders(config: {
+  apiKey?: string
+  headers?: Record<string, string>
+  authHeader?: string
+}): Record<string, string> {
+  const key = config.apiKey || 'anonymous'
+  const result: Record<string, string> = {
+    'content-type': 'application/json',
+    authorization: `Bearer ${key}`,
+  }
+  // 额外的裸 Key 头：值就是 Key 本身，不带前缀
+  if (config.authHeader) result[config.authHeader] = key
+  // 用户自定义头放最后：允许覆盖上面任何一项（比如网关要求改 Authorization 前缀）
+  return { ...result, ...(config.headers ?? {}) }
 }
 
 /** 错误分类：能不能换一家重试，由这一层判断，编排层不必认识 HTTP 状态码。 */
@@ -146,15 +178,11 @@ export async function* streamChat(
   try {
     let res: Response
     try {
-      res = await withIdleTimeout(
-        fetch(`${guard.url}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${config.apiKey || 'anonymous'}`,
-            ...config.headers,
-          },
-          body: JSON.stringify({
+        res = await withIdleTimeout(
+          fetch(`${guard.url}/chat/completions`, {
+            method: 'POST',
+            headers: buildHeaders(config),
+            body: JSON.stringify({
             model: config.model,
             messages,
             stream: true,
@@ -268,6 +296,7 @@ export async function listModels(config: {
   baseUrl: string
   apiKey?: string
   headers?: Record<string, string>
+  authHeader?: string
   timeoutMs?: number
 }): Promise<string[]> {
   const guard = validateBaseUrl(config.baseUrl)
@@ -278,10 +307,7 @@ export async function listModels(config: {
   try {
     const res = await fetch(`${guard.url}/models`, {
       method: 'GET',
-      headers: {
-        authorization: `Bearer ${config.apiKey || 'anonymous'}`,
-        ...config.headers,
-      },
+      headers: buildHeaders(config),
       signal: controller.signal,
     })
     if (!res.ok) {
