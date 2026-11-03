@@ -351,7 +351,14 @@ export async function buildCatalog(options: BuildCatalogOptions = {}): Promise<R
     readCatalogFile(join(dataDir, 'providers.local.json')),
   ])
   const warnings: string[] = reads.map((item) => item.warning).filter((item): item is string => Boolean(item))
-  const files = reads.map((item) => item.file).filter((item): item is CatalogFile => item !== null)
+  // 带上路径再往下走：告警里得说清"是哪份文件写错了"，只写 providers.json 会让人改错文件。
+  const sources = reads
+    .map((item, index) => ({
+      path: index === 0 ? repoFile : join(dataDir, 'providers.local.json'),
+      file: item.file,
+    }))
+    .filter((item): item is { path: string; file: CatalogFile } => item.file !== null)
+  const files = sources.map((item) => item.file)
 
   const patches = new Map<string, CatalogFileEntry>()
   const fileKeys = new Map<string, string>()
@@ -380,7 +387,7 @@ export async function buildCatalog(options: BuildCatalogOptions = {}): Promise<R
   for (const [id, patch] of patches) {
     if (merged.some((profile) => profile.id === id)) continue
     if (!patch.baseUrl || !patch.model) {
-      warnings.push(`providers.json 里的「${id}」缺 baseUrl 或 model，已跳过`)
+      warnings.push(`配置里的「${id}」缺 baseUrl 或 model，已跳过（补上任一项后再来）`)
       continue
     }
     merged.push({
@@ -409,7 +416,10 @@ export async function buildCatalog(options: BuildCatalogOptions = {}): Promise<R
     warnings.push('NUCLEUS_LLM_BASE_URL 没有生效：需要合法的公网 http(s) 地址，并且同时给出 NUCLEUS_LLM_MODEL')
   }
 
-  const order = files.map((file) => file.order).find((item) => item?.length)
+  // 越靠后的文件优先级越高（本地覆盖仓库），所以按倒序找第一个有效的声明。
+  // 之前是正序 find，仓库文件里的 default 会永远压住 data/providers.local.json ——
+  // 表现出来就是"本地明明写了 default 却没切过去"，正是最容易被当成 bug 的那种静默。
+  const order = [...sources].reverse().map((item) => item.file.order).find((item) => item?.length)
   const byId = new Map(merged.map((profile) => [profile.id, profile]))
   const ordered: ProviderProfile[] = []
   for (const id of order ?? []) {
@@ -419,11 +429,11 @@ export async function buildCatalog(options: BuildCatalogOptions = {}): Promise<R
   for (const profile of merged) if (!ordered.includes(profile)) ordered.push(profile)
 
   const fromEnv = env.NUCLEUS_PROVIDER?.trim()
-  const fromFile = files.map((file) => file.default).find((id) => id && byId.has(id))
-  // default 写了但目标不存在（拼错 id / 那一条被 enabled:false 摘了）：说出名字，别静默改道
-  for (const file of files) {
-    if (file.default && !byId.has(file.default)) {
-      warnings.push(`providers.json 的 default「${file.default}」不在目录里，已忽略`)
+  const fromFile = [...sources].reverse().map((item) => item.file.default).find((id) => id && byId.has(id))
+  // default 写了但目标不存在（拼错 id / 那一条被 enabled:false 摘了）：说出名字与文件，别静默改道
+  for (const source of sources) {
+    if (source.file.default && !byId.has(source.file.default)) {
+      warnings.push(`${source.path} 的 default「${source.file.default}」不在目录里，已忽略`)
     }
   }
   if (fromEnv && !byId.has(fromEnv)) {

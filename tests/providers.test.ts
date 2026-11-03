@@ -237,6 +237,20 @@ describe('providers · 目录热加载与诊断', () => {
     expect(catalog.warnings?.some((item) => item.includes('deepsek'))).toBe(true)
   })
 
+  it('UT-PRV-19c 本地文件的 default 能覆盖仓库文件（后写的赢）', async () => {
+    // 旧实现按正序 find，仓库文件里的 default 永远压住 data/providers.local.json：
+    // 本地明明写了 default=deepseek，主力却还是 pollinations —— 静默不生效。
+    await writeConfig({ default: 'deepseek' })
+    await fs.writeFile(
+      join(dir, 'providers.local.json'),
+      JSON.stringify({ default: 'moonshot', providers: [{ id: 'moonshot', apiKey: 'sk-m' }] }),
+      'utf8',
+    )
+    const catalog = await buildCatalog({ dataDir: dir, configFile, env: {} })
+    expect(catalog.defaultId).toBe('moonshot')
+    expect(catalog.entries[0]?.profile.id).toBe('moonshot')
+  })
+
   it('UT-PRV-20 点名预设时可以换模型，且不污染目录本身', async () => {
     const catalog = await buildCatalog({ dataDir: dir, configFile, env: { DEEPSEEK_API_KEY: 'sk-d' } })
     const chain = resolveChain(catalog, { provider: 'deepseek', modelOverride: 'deepseek-reasoner' })

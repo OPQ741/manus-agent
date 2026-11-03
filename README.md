@@ -107,6 +107,23 @@ npm start          # 自动 build，监听 http://localhost:8787
 
 想直接接自家网关，用内联预设：`NUCLEUS_LLM_BASE_URL` + `NUCLEUS_LLM_MODEL`（+ `NUCLEUS_LLM_API_KEY`，或 `NUCLEUS_LLM_FREE=1` 声明它免 Key），它会自动抢下主力位。
 
+### 配 Key 的最小动作：`npm run key`
+
+手改 JSON 容易写坏（少个逗号、`default` 拼错 id），所以给了个命令行工具。它写的是 `data/providers.local.json`（已 gitignore），**写完不用重启**：服务端热加载，下一次请求就生效。
+
+```bash
+npm run key                                  # 看目录：每家能不能用、现在配没配、去哪申请
+npm run key -- zhipu 8f3a....                # 验证 → 写入 → 设为主力
+npm run key -- deepseek sk-xxxx --model deepseek-reasoner
+npm run key -- --test                        # 逐个测已配通道能不能通（发一条 1 token 的请求）
+npm run key -- --models zhipu                # 问上游：这个 Key 实际能调哪些模型
+npm run key -- zhipu --remove                # 摘掉，主力回落到默认
+npm run key -- --id mygw --url https://your-gateway/v1 --model coder --key sk-xxx   # 接自家网关
+```
+
+写入前会真发一次请求校验 Key + 模型名，**验证不过就不写入**（`--force` 可强制）。这一步是为了掐掉最常见的坑：配置看着存进去了，一生成就 401。
+
+
 自定义通道另有两个高级参数（`maxTokens` / `temperature`，不填走 8192 / 0.4）：应用写到一半被截断时，先把输出上限调大。**内网地址默认被 SSRF 防护拒绝**，确实要接 Ollama / vLLM / 内网 one-api，需服务端显式加 `NUCLEUS_ALLOW_LOCAL_LLM=1`。
 
 > 设置页上那句「当前生效 · 原因」不是装饰：点名了却没 Key、地址被拦、Key 存了但没点名，解析链都会静默回退。把回退理由直接写出来，比让人对着界面猜"为什么不是我以为的那家"省事得多。
