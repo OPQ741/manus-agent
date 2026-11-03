@@ -122,10 +122,8 @@ export function HomePage() {
             <br />
             得到一个<em>能用的应用</em>
           </h1>
-          <Paragraph className="hero-sub">描述你的想法，Agent 会先给方案、再逐文件写代码，然后直接在沙箱里跑起来。</Paragraph>
-          <Paragraph className="hero-sub">不满意就继续说，随时能退回上一版。</Paragraph>
           <Paragraph className="hero-sub">
-            代码由<strong>真实大模型</strong>生成，默认走免 Key 通道，无需注册，也可以换成自己的模型 Key。
+            描述想法，Agent 写代码并在沙箱里跑起来；不满意就继续说，随时退回上一版。
           </Paragraph>
         </div>
 
@@ -147,7 +145,7 @@ export function HomePage() {
           />
           <Flex align="center" gap={10} className="composer-bar">
             <Text type="secondary" style={{ fontSize: 12 }}>
-              ⌘/Ctrl + Enter 直接开工 · 生成过程可见、可停止
+              ⌘/Ctrl + Enter
             </Text>
             <div className="spacer" />
             <Button type="primary" size="large" loading={busy} icon={<SendOutlined />} onClick={() => void start()}>
@@ -181,7 +179,7 @@ export function HomePage() {
             项目
           </Typography.Title>
           <Text type="secondary" style={{ fontSize: 12.5 }}>
-            {loading ? '加载中…' : `${projects.length} 个 · 刷新后仍在，数据落盘保存`}
+            {loading ? '加载中…' : `${projects.length} 个 · 已落盘`}
           </Text>
           <div className="spacer" />
           <Segmented

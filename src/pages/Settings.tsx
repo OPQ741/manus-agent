@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, Card, Flex, Form, Input, Segmented, Space, Typography } from 'antd'
+import { Button, Card, Flex, Form, Input, Segmented, Space, Typography } from 'antd'
 import {
   CheckCircleFilled,
   CloseCircleFilled,
@@ -159,7 +159,7 @@ export function SettingsPage() {
     setBaseUrl(item.baseUrl)
     setModel(item.model)
     setApiKey('')
-    toast(`${item.label} 还没配 Key：地址与模型已填好，粘贴 Key 后保存即可`)
+    toast(`${item.label} 需要 Key：地址与模型已填好，粘贴 Key 后保存`)
   }
 
   const dirty =
@@ -192,7 +192,7 @@ export function SettingsPage() {
           title="模型通道"
           extra={
             <Text type="secondary" style={{ fontSize: 12 }}>
-              真实大模型 · 无本地模板兜底
+              v{settings?.version ?? '1.0.0'}
             </Text>
           }
         >
@@ -206,10 +206,6 @@ export function SettingsPage() {
             </Text>
             {active?.free ? <Badge tone="ok">免 Key</Badge> : null}
           </div>
-
-          <Paragraph type="secondary" style={{ fontSize: 12.5, marginTop: 0 }}>
-            打开即用：默认由服务端决定走哪一家。也可以点一张卡片点名预设，或切到「自带 Key」填自己的模型。
-          </Paragraph>
 
           <div className="channel-mode">
             <Segmented
@@ -225,21 +221,17 @@ export function SettingsPage() {
             />
             {namedPreset ? (
               <Space size={4}>
-                <Badge tone="accent">已点名 · {namedPreset.label}</Badge>
+                <Badge tone="accent">{namedPreset.label}</Badge>
                 <Button
                   size="small"
                   type="link"
                   style={{ padding: 0, height: 'auto', fontSize: 12 }}
                   onClick={() => setProvider(AUTO)}
                 >
-                  取消点名
+                  取消
                 </Button>
               </Space>
-            ) : (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                未点名时用服务端主力
-              </Text>
-            )}
+            ) : null}
           </div>
 
           <div className="provider-list">
@@ -268,17 +260,16 @@ export function SettingsPage() {
                     <Text strong style={{ fontSize: 13 }}>
                       {item.label}
                     </Text>
-                    {item.free ? <Badge tone="ok">免 Key</Badge> : null}
-                    {item.isDefault ? <Badge tone="accent">服务端默认</Badge> : null}
+                    {item.isDefault ? <Badge tone="accent">默认</Badge> : null}
                     {!item.ready ? <Badge>未配置</Badge> : null}
                     {source ? <Badge tone="accent">正在用它</Badge> : null}
                     <div className="spacer" />
                     {on ? <CheckCircleFilled style={{ color: 'var(--accent)', fontSize: 13 }} /> : null}
                   </div>
-                  <div className="prov-model mono">{item.model}</div>
+                  <div className="prov-model mono">{item.free ? `${item.model} · 免 Key` : item.model}</div>
                   <div className="prov-note">{item.note ?? ''}</div>
                   <div className="prov-foot">
-                    <span className="prov-cta">{on ? '当前通道' : item.ready ? '点此使用' : '用我的 Key 走这家'}</span>
+                    <span className="prov-cta">{on ? '当前通道' : item.ready ? '切换到此' : '填 Key 使用'}</span>
                     <div className="spacer" />
                     {!item.ready && item.keyUrl ? (
                       <Button
@@ -298,6 +289,11 @@ export function SettingsPage() {
               )
             })}
           </div>
+
+          <Paragraph type="secondary" className="channel-foot">
+            生成物是 HTML / CSS / JS 静态应用，在 sandbox iframe 里运行，数据存在浏览器本地。部署者可用
+            <code>NUCLEUS_PROVIDER</code>、<code>DEEPSEEK_API_KEY</code> 等环境变量预设主力模型，详见 README「接模型」。
+          </Paragraph>
         </Card>
 
         {isCustom ? (
@@ -310,15 +306,12 @@ export function SettingsPage() {
             }
             extra={
               <Text type="secondary" style={{ fontSize: 12 }}>
-                只存在服务端，接口只回显掩码
+                仅存服务端，只回显掩码
               </Text>
             }
           >
             <Form layout="vertical" requiredMark={false}>
-              <Form.Item
-                label="模型地址（Base URL）"
-                extra="会拼成 {baseUrl}/chat/completions，必须支持 SSE 流式；内网地址会被拒绝。"
-              >
+              <Form.Item label="模型地址（Base URL）" extra="需支持 SSE 流式；内网地址会被拒绝。">
                 <Input
                   value={baseUrl}
                   onChange={(event) => setBaseUrl(event.target.value)}
@@ -375,12 +368,9 @@ export function SettingsPage() {
           </Card>
         ) : null}
 
-        <Card title="界面外观" extra={<Text type="secondary" style={{ fontSize: 12 }}>切换即时生效</Text>}>
+        <Card title="界面外观">
           <Form layout="vertical" requiredMark={false}>
-            <Form.Item
-              label="主色"
-              extra="立即改变本页的强调色，同时作为新生成应用的默认主色；需求里写「主色用墨绿」会以需求为准。"
-            >
+            <Form.Item label="主色" tooltip="即时生效，并作为新生成应用的默认主色；需求里指定主色时以需求为准。">
               <div className="swatches">
                 {ACCENTS.map((color) => (
                   <button
@@ -395,10 +385,7 @@ export function SettingsPage() {
                 ))}
               </div>
             </Form.Item>
-            <Form.Item
-              label="主题"
-              extra="本页与新建应用共用这套外观；「跟随系统」会随操作系统的浅色/深色自动切换。"
-            >
+            <Form.Item label="主题" tooltip="与新建应用共用；「跟随系统」随系统深浅色切换。">
               <Segmented
                 value={prefs.theme}
                 onChange={(value) => setTheme(value as 'light' | 'dark' | 'auto')}
@@ -416,26 +403,12 @@ export function SettingsPage() {
           <Button type="primary" onClick={() => void save()} loading={saving}>
             保存设置
           </Button>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {dirty
-              ? '有未保存的改动：模型通道要保存后才生效，外观已经生效。'
-              : '外观改动即时生效；模型通道保存后对新生成生效。'}
-          </Text>
-        </Flex>
-
-        <Alert
-          type="info"
-          showIcon={false}
-          message={
-            <Text type="secondary" style={{ fontSize: 12.5, lineHeight: 1.9 }}>
-              Nucleus Studio v{settings?.version ?? '1.0.0'} · 生成物是多文件静态应用（HTML / CSS / JS），在 sandbox iframe
-              里运行，数据存在你自己的浏览器里。
-              <br />
-              部署者可用环境变量预设主力模型（<code>NUCLEUS_PROVIDER</code>、<code>DEEPSEEK_API_KEY</code> …），详见仓库 README
-              的「接模型」一节。
+          {dirty ? (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              模型通道改动待保存（外观已生效）
             </Text>
-          }
-        />
+          ) : null}
+        </Flex>
       </div>
     </>
   )

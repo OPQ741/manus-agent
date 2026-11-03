@@ -76,7 +76,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     // 实测匿名档：同一 IP 每 30 秒 1 次请求。多留 1 秒余量，把并发变排队。
     minIntervalMs: 31_000,
     keyUrl: 'https://enter.pollinations.ai',
-    note: '无需注册即可使用；匿名配额约 1 次 / 30 秒，多人同时生成会排队。',
+    note: '免注册，约 30 秒 1 次',
     builtin: true,
   },
   {
@@ -88,7 +88,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     maxTokens: 8192,
     temperature: 0.4,
     keyUrl: 'https://platform.deepseek.com/api_keys',
-    note: '中文与代码都稳，按量计费；给了 Key 就是主力候选。',
+    note: '中文与代码都稳，按量计费',
     builtin: true,
   },
   {
@@ -100,7 +100,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     maxTokens: 8192,
     temperature: 0.5,
     keyUrl: 'https://aistudio.google.com/apikey',
-    note: '有免费档（无需信用卡），速率较宽、出码快。',
+    note: '有免费档，出码快',
     builtin: true,
   },
   {
@@ -112,7 +112,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     maxTokens: 8192,
     temperature: 0.4,
     keyUrl: 'https://platform.moonshot.cn/console/api-keys',
-    note: '国内直连、中文好；模型名换代快，可在配置文件里覆盖。',
+    note: '国内直连、中文好',
     builtin: true,
   },
   {
@@ -124,7 +124,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     maxTokens: 8192,
     temperature: 0.4,
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
-    note: 'Air/Flash 系列有免费价；国内可达。',
+    note: '国内可达，有免费档',
     builtin: true,
   },
   {
@@ -137,7 +137,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     temperature: 0.4,
     headers: { 'http-referer': 'https://github.com/OPQ741/manus-agent', 'x-title': 'Nucleus Studio' },
     keyUrl: 'https://openrouter.ai/settings/keys',
-    note: '一个 Key 换一堆模型（含 :free 免费档），适合做 A/B。',
+    note: '一个 Key 换一堆模型',
     builtin: true,
   },
   {
@@ -149,7 +149,7 @@ export const BUILTIN_PROVIDERS: ProviderProfile[] = [
     maxTokens: 8192,
     temperature: 0.4,
     keyUrl: 'https://cloud.siliconflow.cn/account/ak',
-    note: '注册送额度，国内可达；出码类模型。',
+    note: '注册送额度，国内可达',
     builtin: true,
   },
 ]
