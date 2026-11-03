@@ -31,12 +31,14 @@ Nucleus 不是一个套壳聊天框。它把「Agent 生成应用」拆成一条
 
 ## 演示录屏 · 2 分 52 秒走完一遍闭环
 
-[![▶ 点封面播放：从一句话到能用的应用](docs/screenshots/studio.png)](https://cdn.jsdelivr.net/gh/OPQ741/manus-agent@master/docs/media/nucleus-demo.mp4)
+[![▶ 点封面播放：从一句话到能用的应用](docs/screenshots/studio.png)](https://cdn.jsdmirror.com/gh/OPQ741/manus-agent@master/docs/media/nucleus-demo.mp4)
 
-<sub>▶ **点上面的封面直接在浏览器里播放**（MP4 · 3.3 MB）。GitHub 的 README 不允许内嵌 `<video>` 播放器，所以视频本体入库到
-[`docs/media/nucleus-demo.mp4`](docs/media/nucleus-demo.mp4)，对外播放走 **jsDelivr CDN** 直链
-（`https://cdn.jsdelivr.net/gh/OPQ741/manus-agent@master/docs/media/nucleus-demo.mp4`，支持 Range 请求、可拖动进度条）。
-录的是本机真实链路：真实模型、真实浏览器操作、没有剪辑掉等待，慢就是慢。想重录：`npm run demo:record`。</sub>
+<sub>▶ **点上面的封面直接在浏览器里播放**（MP4 · 3.3 MB，可拖进度条）。GitHub 的 README 不允许内嵌 `<video>`
+播放器（会过滤 video/iframe 标签），所以视频本体入库在 [`docs/media/nucleus-demo.mp4`](docs/media/nucleus-demo.mp4)，
+播放走 jsDelivr 镜像域名 `cdn.jsdmirror.com` —— 实测返回 `video/mp4` + `206 Partial Content`，秒开、可逐段拖；
+`cdn.jsdelivr.net` 对 mp4 会 301 跳回 `raw.githubusercontent.com` 并给成 `application/octet-stream`（浏览器会改成下载），
+所以这里没直接用它。海外访问可直接取仓库内的原文件。录的是本机真实链路：真实模型、真实浏览器操作，
+没有剪辑掉等待，慢就是慢。想重录：`npm run demo:record`。</sub>
 
 ## 界面一览 · 照着走一遍就是全部闭环
 
@@ -325,7 +327,7 @@ npm run e2e          # 真实 Chrome 浏览器 14 步（需先 npm start）
 | 笔试回收通道作答 | ✅ [`docs/00-笔试题目原文.md`](docs/00-笔试题目原文.md)                                                                                                  |
 | 简要说明文档     | ✅ [`docs/06-交付说明.md`](docs/06-交付说明.md)（实现思路 · 取舍 · 完成度 · 后续优先级）                                                                 |
 | 开源许可证       | ✅ [`LICENSE`](LICENSE)（MIT，补齐 README 声明与仓库实际一致）                                                                                           |
-| 演示视频         | ✅ [2 分 52 秒录屏](https://cdn.jsdelivr.net/gh/OPQ741/manus-agent@master/docs/media/nucleus-demo.mp4)（源文件 [`docs/media/nucleus-demo.mp4`](docs/media/nucleus-demo.mp4)，README 顶部可点封面播放；另有 `npm run e2e` 的 14 步真实浏览器回放作可复跑证据） |
+| 演示视频         | ✅ [2 分 52 秒录屏](https://cdn.jsdmirror.com/gh/OPQ741/manus-agent@master/docs/media/nucleus-demo.mp4)（点了直接播；源文件 [`docs/media/nucleus-demo.mp4`](docs/media/nucleus-demo.mp4)，README 顶部可点封面；另有 `npm run e2e` 的 14 步真实浏览器回放作可复跑证据） |
 | AI 工具账单      | ⚠️ 未附（由本人补充真实账单截图，模板见 [00 §4.4](docs/00-笔试题目原文.md) 与 [06 §10](docs/06-交付说明.md)）                                            |
 
 ---
