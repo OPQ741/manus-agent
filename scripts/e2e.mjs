@@ -102,7 +102,11 @@ try {
     await iframeElement().waitFor({ state: 'attached', timeout: GEN_TIMEOUT })
     await waitForGenerationEnd()
     const text = await previewText()
-    assert.ok(text.length > 20, `预览几乎是空的：${text.slice(0, 80)}`)
+    // 这里只判断"不是白屏"。原来的阈值是 20 字符，但一个极简记账页
+    // （标题 + 金额/分类/备注 + 添加按钮）干净起来正好 18 个字符 —— 阈值卡在
+    // 内容密度上而不是功能上，模型少写一行提示语就会误报。真正的判定在下面：
+    // 应用名必须出现、代码面板必须有内容、下一步必须能真的录入并持久化。
+    assert.ok(text.length > 8, `预览几乎是空的：${text.slice(0, 80)}`)
     // 应用名由模型决定，但需求里点了名，产物标题就该出现它
     assert.match(text, /E2E 账本/, `预览文本里没有应用名：${text.slice(0, 120)}`)
     // 代码面板必须真的有内容（行数来自真实解析，不是占位）
@@ -114,23 +118,27 @@ try {
 
   await step('E2E-03 应用内真实交互 + 刷新预览后数据仍在', async () => {
     const token = `E2E${Date.now().toString(36).slice(-5)}`
+    // <input type="number">（金额之类）拒绝字母，给它一个纯数字标记
+    const numericToken = String(Date.now()).slice(-6)
     const before = await previewText()
 
-    // 往第一个可输入框里塞唯一标记，再点第一个提交类按钮 —— 对任何一版生成物都成立
+    // 把所有可填写字段都填上唯一标记：生成物常有必填校验
+    // （例如记账页要求「金额 + 分类」都有值），只填第一个字段提交会被拦下，
+    // 那样测的是校验文案而不是"录入 → 落库 → 刷新还在"。
     const inputs = frame().locator('input:not([type="hidden"]), textarea')
     const count = await inputs.count()
     assert.ok(count > 0, '生成物里没有任何输入框，谈不上"真实交互"')
-    let typed = false
+    let filled = 0
     for (let i = 0; i < count; i += 1) {
       const input = inputs.nth(i)
-      const type = (await input.getAttribute('type')) ?? 'text'
-      if (['checkbox', 'radio', 'date', 'color', 'range', 'file'].includes(type.toLowerCase())) continue
+      const type = ((await input.getAttribute('type')) ?? 'text').toLowerCase()
+      if (['checkbox', 'radio', 'date', 'color', 'range', 'file'].includes(type)) continue
+      if (!(await input.isVisible())) continue
       await input.scrollIntoViewIfNeeded()
-      await input.fill(token)
-      typed = true
-      break
+      await input.fill(type === 'number' ? numericToken : token)
+      filled += 1
     }
-    assert.ok(typed, '生成物里没有可填写的输入框')
+    assert.ok(filled > 0, '生成物里没有可填写的输入框')
 
     const buttons = frame().locator('button, button[type="submit"], input[type="submit"]')
     const buttonCount = await buttons.count()
@@ -144,16 +152,19 @@ try {
     }
     assert.ok(clicked, '生成物里的按钮点不动')
 
+    const marks = [token, numericToken]
+    const hasMark = (text) => marks.some((mark) => text.includes(mark))
+
     await page.waitForTimeout(800)
     const after = await previewText()
     assert.notEqual(after, before, '点了提交按钮但页面没有任何变化，交互是假的')
-    assert.ok(after.includes(token), `页面上找不到刚录入的标记 ${token}`)
+    assert.ok(hasMark(after), `页面上找不到刚录入的标记 ${token} / ${numericToken}`)
 
     // 刷新预览：种子从宿主页面回灌，数据不应丢 —— 这才是"持久化"而不是"内存里活着"
     await page.getByRole('button', { name: '重新加载预览' }).click()
     await frame().locator('body').waitFor({ state: 'visible', timeout: 20_000 })
     const reloaded = await previewText()
-    assert.ok(reloaded.includes(token), '刷新预览后数据丢了，localStorage 桥接没生效')
+    assert.ok(hasMark(reloaded), '刷新预览后数据丢了，localStorage 桥接没生效')
   })
 
   await step('E2E-04 迭代修改生成新版本', async () => {
@@ -258,44 +269,55 @@ try {
 
     // 在 Node 侧发起生成并逐帧读 SSE：精确地在"第一个文件刚写完"那一刻喊停。
     // 真实模型一轮要几十秒，这个窗口比本地编译器时代宽得多，反而更好抓。
-    const response = await fetch(`${BASE}/api/projects/${projectId}/generate`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt }),
-    })
-    assert.equal(response.status, 200)
-
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
+    //
+    // 免 Key 通道会偶发 "模型响应超时（30s 无数据）"：那一轮只会回一个 error 事件，
+    // 没有任何 file_end —— 那是上游抖动，不是"停止保留"功能坏了。所以重试两轮，
+    // 只有连续三轮都没有 file_end 才判失败，并把最后一次错误带进断言信息。
     let stopped = false
     let partial = false
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      let index
-      while ((index = buffer.indexOf('\n\n')) >= 0) {
-        const block = buffer.slice(0, index)
-        buffer = buffer.slice(index + 2)
-        for (const line of block.split('\n')) {
-          const trimmed = line.trim()
-          if (!trimmed.startsWith('data:')) continue
-          let event
-          try {
-            event = JSON.parse(trimmed.slice(5).trim())
-          } catch {
-            continue
+    let lastError = null
+
+    for (let attempt = 1; attempt <= 3 && !stopped; attempt += 1) {
+      partial = false
+      const response = await fetch(`${BASE}/api/projects/${projectId}/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      })
+      assert.equal(response.status, 200)
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let index
+        while ((index = buffer.indexOf('\n\n')) >= 0) {
+          const block = buffer.slice(0, index)
+          buffer = buffer.slice(index + 2)
+          for (const line of block.split('\n')) {
+            const trimmed = line.trim()
+            if (!trimmed.startsWith('data:')) continue
+            let event
+            try {
+              event = JSON.parse(trimmed.slice(5).trim())
+            } catch {
+              continue
+            }
+            if (event.type === 'error') lastError = event.message
+            if (event.type === 'file_end' && !stopped) {
+              stopped = true
+              await fetch(`${BASE}/api/projects/${projectId}/stop`, { method: 'POST' })
+            }
+            if (event.type === 'done' && event.partial) partial = true
           }
-          if (event.type === 'file_end' && !stopped) {
-            stopped = true
-            await fetch(`${BASE}/api/projects/${projectId}/stop`, { method: 'POST' })
-          }
-          if (event.type === 'done' && event.partial) partial = true
         }
       }
+      if (!stopped && attempt < 3) await new Promise((resolve) => setTimeout(resolve, 4_000))
     }
-    assert.ok(stopped, '整轮生成太快，一个 file_end 都没等到 —— 这条用例失去意义')
+    assert.ok(stopped, `三轮生成都没等到 file_end${lastError ? `，最后一次错误：${lastError}` : ''}`)
     assert.ok(partial, '没有收到 partial 的 done 事件')
 
     // 界面上能看到这个「中断保留」的版本

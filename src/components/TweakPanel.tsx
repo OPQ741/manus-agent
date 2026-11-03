@@ -1,6 +1,7 @@
+import { Button, Flex, Space, Typography } from 'antd'
+import { BgColorsOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { DesignTweak } from '../../shared/types'
 import { RADIUS_MAX, tweakVars } from '../../shared/theme'
-import { IconPalette, IconRefresh } from './ui'
 
 /**
  * 设计微调面板：改主色 / 圆角。
@@ -10,6 +11,8 @@ import { IconPalette, IconRefresh } from './ui'
  * 面板只负责收集意图，真正的"生效"由宿主 postMessage 推给沙箱，
  * 所以调色时应用里的输入内容、滚动位置、已填表单都不会被重置。
  */
+
+const { Text } = Typography
 
 const PRESETS: { label: string; hex: string }[] = [
   { label: '墨绿', hex: '#17624b' },
@@ -36,15 +39,17 @@ export function TweakPanel({ tweak, supportsTokens, saving, onChange, onReset }:
   const vars = tweakVars(tweak)
 
   return (
-    <div className="tweak-panel" role="group" aria-label="设计微调">
-      <span className="tweak-label">
-        <IconPalette size={13} /> 主色
-      </span>
-      <div className="tweak-swatches">
+    <Flex className="tweak-panel" align="center" gap={10} wrap role="group" aria-label="设计微调">
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        <BgColorsOutlined /> 主色
+      </Text>
+
+      <Space size={6}>
         {PRESETS.map((preset) => (
           <button
             key={preset.hex}
-            className="swatch"
+            type="button"
+            className={`swatch${accent === preset.hex ? ' is-on' : ''}`}
             style={{ background: preset.hex }}
             aria-label={`主色 ${preset.label}`}
             aria-pressed={accent === preset.hex}
@@ -52,7 +57,8 @@ export function TweakPanel({ tweak, supportsTokens, saving, onChange, onReset }:
             onClick={() => onChange({ ...tweak, accent: preset.hex })}
           />
         ))}
-        <label className="swatch custom" title="自定义颜色">
+        {/* 自定义颜色用浏览器原生取色器：它是系统级控件，比再引一个调色板组件更轻也更准 */}
+        <label className={`swatch swatch-color${accent && !PRESETS.some((preset) => preset.hex === accent) ? ' is-on' : ''}`} title="自定义颜色">
           <input
             type="color"
             value={accent || '#17624b'}
@@ -61,11 +67,17 @@ export function TweakPanel({ tweak, supportsTokens, saving, onChange, onReset }:
           />
           <span style={{ background: accent || 'conic-gradient(#e11d6b,#4f46e5,#0e7490,#b45309,#e11d6b)' }} />
         </label>
-      </div>
+      </Space>
 
       <span className="tweak-sep" />
 
-      <span className="tweak-label">圆角</span>
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        圆角
+      </Text>
+      {/*
+        这里刻意保留原生 range：它是浏览器级的无障碍控件（键盘、触摸、辅助技术全部原生支持），
+        换成 Slider 只会多一层包装。视觉用 accent-color 跟随主题，不额外写样式。
+      */}
       <input
         className="tweak-range"
         type="range"
@@ -76,17 +88,27 @@ export function TweakPanel({ tweak, supportsTokens, saving, onChange, onReset }:
         aria-label="圆角大小"
         onChange={(event) => onChange({ ...tweak, radius: Number(event.target.value) })}
       />
-      <span className="mono tweak-value">{radius}px</span>
+      <Text className="mono" style={{ fontSize: 12 }}>
+        {radius}px
+      </Text>
 
-      <span className="spacer" />
+      <div className="spacer" />
 
-      {saving ? <span className="tweak-hint">保存中…</span> : null}
-      {!supportsTokens ? <span className="tweak-hint">该应用未声明设计令牌，只能调圆角</span> : null}
-      {Object.keys(vars).length > 0 ? (
-        <button className="btn sm ghost" onClick={onReset} title="清除微调，回到生成时的外观">
-          <IconRefresh size={12} /> 恢复默认
-        </button>
+      {saving ? (
+        <Text type="secondary" style={{ fontSize: 11.5 }}>
+          保存中…
+        </Text>
       ) : null}
-    </div>
+      {!supportsTokens ? (
+        <Text type="secondary" style={{ fontSize: 11.5 }}>
+          该应用未声明设计令牌，只能调圆角
+        </Text>
+      ) : null}
+      {Object.keys(vars).length > 0 ? (
+        <Button size="small" type="text" icon={<ReloadOutlined />} onClick={onReset} title="清除微调，回到生成时的外观">
+          恢复默认
+        </Button>
+      ) : null}
+    </Flex>
   )
 }

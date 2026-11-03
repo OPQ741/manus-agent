@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Button, Result } from 'antd'
 import { ToastHost } from './components/ui'
 import { HomePage } from './pages/Home'
 import { SettingsPage } from './pages/Settings'
@@ -25,6 +26,14 @@ function parseHash(): Route {
   return { name: 'notfound', path }
 }
 
+const TITLES: Record<Route['name'], string> = {
+  home: 'Nucleus · 说一句话，得到一个能用的应用',
+  studio: '工作台 · Nucleus',
+  share: '分享 · Nucleus',
+  settings: '设置 · Nucleus',
+  notfound: '未找到 · Nucleus',
+}
+
 export default function App() {
   const [route, setRoute] = useState<Route>(parseHash)
 
@@ -38,14 +47,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    const titles: Record<Route['name'], string> = {
-      home: 'Nucleus · 说一句话，得到一个能用的应用',
-      studio: '工作台 · Nucleus',
-      share: '分享 · Nucleus',
-      settings: '设置 · Nucleus',
-      notfound: '未找到 · Nucleus',
-    }
-    document.title = titles[route.name]
+    document.title = TITLES[route.name]
   }, [route])
 
   return (
@@ -55,15 +57,16 @@ export default function App() {
       {route.name === 'share' ? <SharePage slug={route.slug} key={route.slug} /> : null}
       {route.name === 'settings' ? <SettingsPage /> : null}
       {route.name === 'notfound' ? (
-        <div className="home">
-          <div className="empty-block">
-            <p style={{ margin: 0, fontWeight: 600 }}>页面不存在</p>
-            <p style={{ margin: '6px 0 14px', fontSize: 12.5 }}>{route.path}</p>
-            <a className="btn primary" href="#/">
+        <Result
+          status="404"
+          title="页面不存在"
+          subTitle={route.path}
+          extra={
+            <Button type="primary" href="#/">
               回到首页
-            </a>
-          </div>
-        </div>
+            </Button>
+          }
+        />
       ) : null}
       <ToastHost />
     </>

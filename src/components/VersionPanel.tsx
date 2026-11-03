@@ -1,8 +1,12 @@
 import { useMemo } from 'react'
+import { Button, Card, Empty, Flex, Space, Typography } from 'antd'
+import { HistoryOutlined } from '@ant-design/icons'
 import type { Version } from '../../shared/types'
 import { diffFiles } from '../lib/diff'
 import { formatTime } from '../lib/format'
-import { IconHistory } from './ui'
+import { Badge } from './ui'
+
+const { Text } = Typography
 
 interface Props {
   versions: Version[]
@@ -23,34 +27,42 @@ export function VersionPanel({ versions, current, onRollback, busy }: Props) {
   )
 
   if (versions.length === 0) {
-    return (
-      <div className="empty-block" style={{ margin: 'auto' }}>
-        还没有版本。每完成一次生成，就会在这里留下一个可回滚的快照。
-      </div>
-    )
+    return <Empty className="empty-block" description="还没有版本。每完成一次生成，就会在这里留下一个可回滚的快照。" />
   }
 
   return (
-    <div className="timeline">
+    <Space direction="vertical" size={10} className="version-list">
       {enriched.map(({ version, diffs }) => {
         const added = diffs.reduce((sum, item) => sum + item.added, 0)
         const removed = diffs.reduce((sum, item) => sum + item.removed, 0)
+        const isCurrent = version.seq === current
+        const interrupted = version.label.startsWith('中断保留')
+
         return (
-          <article key={version.id} className={`version-item${version.seq === current ? ' current' : ''}`}>
-            <div className="version-seq">v{version.seq}</div>
-            <div className="version-body">
-              <div className="row" style={{ gap: 8 }}>
-                <h5>{version.label}</h5>
-                {version.seq === current ? <span className="badge accent">当前</span> : null}
-                {version.label.startsWith('中断保留') ? <span className="badge warn">中断</span> : null}
-                <div className="spacer" />
-                {version.seq !== current ? (
-                  <button className="btn sm" disabled={busy} onClick={() => onRollback(version.seq)}>
-                    <IconHistory size={13} /> 回滚
-                  </button>
-                ) : null}
-              </div>
-              <span className="meta">
+          <Card
+            key={version.id}
+            size="small"
+            className={`version-item${isCurrent ? ' current' : ''}`}
+            title={
+              <Flex align="center" gap={8} wrap>
+                <Badge tone="accent">v{version.seq}</Badge>
+                <Text strong style={{ fontSize: 13 }}>
+                  {version.label}
+                </Text>
+                {isCurrent ? <Badge tone="ok">当前</Badge> : null}
+                {interrupted ? <Badge tone="warn">中断</Badge> : null}
+              </Flex>
+            }
+            extra={
+              isCurrent ? null : (
+                <Button size="small" icon={<HistoryOutlined />} disabled={busy} onClick={() => onRollback(version.seq)}>
+                  回滚
+                </Button>
+              )
+            }
+          >
+            <Flex vertical gap={6}>
+              <Text type="secondary" style={{ fontSize: 11.5 }}>
                 {formatTime(version.createdAt)} · {version.files.length} 个文件
                 {diffs.length > 0 ? ` · 变更 ${diffs.length} 个` : ''}
                 {added || removed ? (
@@ -59,27 +71,27 @@ export function VersionPanel({ versions, current, onRollback, busy }: Props) {
                     <span className="diff-add">+{added}</span> <span className="diff-del">−{removed}</span>
                   </>
                 ) : null}
-              </span>
+              </Text>
               {version.prompt ? (
-                <span className="meta" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <Text type="secondary" italic ellipsis={{ tooltip: version.prompt }} style={{ fontSize: 11.5 }}>
                   “{version.prompt}”
-                </span>
+                </Text>
               ) : null}
               {diffs.length > 0 ? (
-                <div className="version-changes">
+                <Flex wrap gap={5}>
                   {diffs.map((diff) => (
-                    <span key={diff.path} className="diff-file" title={`${diff.status} +${diff.added} −${diff.removed}`}>
-                      {diff.path}
+                    <Badge key={diff.path} className="diff-file" title={`${diff.status} +${diff.added} −${diff.removed}`}>
+                      <span className="mono">{diff.path}</span>
                       {diff.status === 'added' ? <span className="diff-add"> 新增</span> : null}
                       {diff.status === 'removed' ? <span className="diff-del"> 删除</span> : null}
-                    </span>
+                    </Badge>
                   ))}
-                </div>
+                </Flex>
               ) : null}
-            </div>
-          </article>
+            </Flex>
+          </Card>
         )
       })}
-    </div>
+    </Space>
   )
 }

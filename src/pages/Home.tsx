@@ -1,10 +1,28 @@
 import { useEffect, useRef, useState } from 'react'
+import type { TextAreaRef } from 'antd/es/input/TextArea'
+import {
+  Alert,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Input,
+  Popconfirm,
+  Segmented,
+  Skeleton,
+  Space,
+  Tooltip,
+  Typography,
+} from 'antd'
+import { DeleteOutlined, ReloadOutlined, SendOutlined, SettingOutlined } from '@ant-design/icons'
 import type { ProjectSummary } from '../../shared/types'
 import { TopBar } from '../components/TopBar'
-import { Empty, IconRefresh, IconSend, IconSettings, IconTrash, toast } from '../components/ui'
+import { Badge, toast } from '../components/ui'
 import { api, visitorId } from '../lib/api'
 import { timeAgo } from '../lib/format'
 import { setPendingPrompt } from '../lib/pending'
+
+const { Text, Paragraph } = Typography
 
 const TEMPLATES: { label: string; prompt: string }[] = [
   { label: '记账本', prompt: '做一个记账应用，叫「随手记账」，主色用墨绿，记录金额、分类和备注' },
@@ -22,9 +40,7 @@ export function HomePage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [mine, setMine] = useState(false)
-  /** 二次确认中的项目 id：项目带着全部版本历史，删掉无法恢复，不该一次误点就没。 */
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
-  const areaRef = useRef<HTMLTextAreaElement>(null)
+  const areaRef = useRef<TextAreaRef>(null)
   const me = visitorId()
 
   const load = async (onlyMine = mine, force = false) => {
@@ -40,6 +56,7 @@ export function HomePage() {
 
   useEffect(() => {
     void load(mine)
+    // 全局快捷键：搜索框聚焦，与 Studio 里的输入框保持同一套手势
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
@@ -73,7 +90,6 @@ export function HomePage() {
   }
 
   const remove = async (id: string) => {
-    setConfirmDelete(null)
     try {
       await api.deleteProject(id)
       setProjects((prev) => prev.filter((item) => item.id !== id))
@@ -85,15 +101,17 @@ export function HomePage() {
     }
   }
 
+  const open = (id: string) => {
+    window.location.hash = `#/studio/${id}`
+  }
+
   return (
     <>
       <TopBar
         right={
-          <>
-            <a className="btn ghost" href="#/settings">
-              <IconSettings /> 设置
-            </a>
-          </>
+          <Button type="text" icon={<SettingOutlined />} href="#/settings">
+            设置
+          </Button>
         }
       />
 
@@ -104,18 +122,19 @@ export function HomePage() {
             <br />
             得到一个<em>能用的应用</em>
           </h1>
-          <p>
-            描述你的想法，Agent 会先给方案、再逐文件写代码，然后直接在沙箱里跑起来。
-            不满意就继续说，随时能退回上一版。
+          <Paragraph className="hero-sub">
+            描述你的想法，Agent 会先给方案、再逐文件写代码，然后直接在沙箱里跑起来。 不满意就继续说，随时能退回上一版。
             <br />
             代码由<strong>真实大模型</strong>生成，默认走免 Key 通道，无需注册；也可以换成你自己的模型 Key。
-          </p>
+          </Paragraph>
         </div>
 
         <div className="composer">
-          <textarea
+          <Input.TextArea
             ref={areaRef}
+            variant="borderless"
             value={prompt}
+            autoSize={{ minRows: 3, maxRows: 8 }}
             onChange={(event) => setPrompt(event.target.value)}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -126,120 +145,138 @@ export function HomePage() {
             placeholder="例如：做一个记账应用，记录每天的花销，能按分类看占比…"
             aria-label="描述你想要的应用"
           />
-          <div className="composer-bar">
-            <span className="composer-hint">⌘/Ctrl + Enter 直接开工 · 生成过程可见、可停止</span>
+          <Flex align="center" gap={10} className="composer-bar">
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              ⌘/Ctrl + Enter 直接开工 · 生成过程可见、可停止
+            </Text>
             <div className="spacer" />
-            <button className="btn primary" onClick={() => void start()} disabled={busy}>
-              {busy ? <span className="spin" /> : <IconSend />}
+            <Button type="primary" size="large" loading={busy} icon={<SendOutlined />} onClick={() => void start()}>
               生成应用
-            </button>
-          </div>
+            </Button>
+          </Flex>
         </div>
 
-        <div className="chips">
+        <Flex className="chips" wrap gap={8} justify="center">
           {TEMPLATES.map((template) => (
-            <button
+            <Button
               key={template.label}
-              className="chip"
+              size="small"
+              shape="round"
               onClick={() => {
                 setPrompt(template.prompt)
                 areaRef.current?.focus()
               }}
             >
               {template.label}
-            </button>
+            </Button>
           ))}
-        </div>
+        </Flex>
 
         {error ? (
-          <p style={{ textAlign: 'center', color: 'var(--danger)', fontSize: 13 }} role="alert">
-            {error}
-          </p>
+          <Alert type="error" showIcon message={error} closable onClose={() => setError(null)} style={{ marginBottom: 18 }} />
         ) : null}
 
-        <div className="section-head">
-          <h2>项目</h2>
-          <span className="muted" style={{ fontSize: 12.5 }}>
+        <Flex className="section-head" align="center" gap={10} wrap>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            项目
+          </Typography.Title>
+          <Text type="secondary" style={{ fontSize: 12.5 }}>
             {loading ? '加载中…' : `${projects.length} 个 · 刷新后仍在，数据落盘保存`}
-          </span>
+          </Text>
           <div className="spacer" />
-          <div className="segmented" role="group" aria-label="项目范围">
-            <button aria-pressed={!mine} onClick={() => setMine(false)}>
-              全部
-            </button>
-            <button aria-pressed={mine} onClick={() => setMine(true)}>
-              我的
-            </button>
-          </div>
-          <button className="btn sm ghost" onClick={() => void load(mine, true)} title="强制刷新列表（绕过 30s 缓存）">
-            <IconRefresh size={13} /> 刷新
-          </button>
-        </div>
+          <Segmented
+            value={mine ? 'mine' : 'all'}
+            onChange={(value) => setMine(value === 'mine')}
+            options={[
+              { label: '全部', value: 'all' },
+              { label: '我的', value: 'mine' },
+            ]}
+          />
+          <Tooltip title="强制刷新列表（绕过 30s 缓存）">
+            <Button size="small" type="text" icon={<ReloadOutlined />} onClick={() => void load(mine, true)}>
+              刷新
+            </Button>
+          </Tooltip>
+        </Flex>
 
         {loading ? (
           <div className="grid">
             {[0, 1, 2].map((index) => (
-              <div key={index} className="card" style={{ height: 118, opacity: 0.5 }} />
+              <Card key={index} className="project-card">
+                <Skeleton active paragraph={{ rows: 2 }} title={{ width: '40%' }} />
+              </Card>
             ))}
           </div>
         ) : projects.length === 0 ? (
           <Empty
-            title={mine ? '你还没有创建过项目' : '还没有项目'}
-            hint={
-              mine
-                ? '切回「全部」能看到所有人的项目；在上面写一句话，就会创建属于你的第一个应用。'
-                : '在上面写一句话，或者点一个灵感标签，30 秒后这里就会出现你的第一个应用。'
+            className="empty-block"
+            description={
+              <Space direction="vertical" size={2}>
+                <Text strong>{mine ? '你还没有创建过项目' : '还没有项目'}</Text>
+                <Text type="secondary" style={{ fontSize: 12.5 }}>
+                  {mine
+                    ? '切回「全部」能看到所有人的项目；在上面写一句话，就会创建属于你的第一个应用。'
+                    : '在上面写一句话，或者点一个灵感标签，30 秒后这里就会出现你的第一个应用。'}
+                </Text>
+              </Space>
             }
           />
         ) : (
           <div className="grid">
             {projects.map((project) => (
-              <article
+              <Card
                 key={project.id}
                 className="project-card"
+                hoverable
                 role="button"
                 tabIndex={0}
                 aria-label={`打开 ${project.name}`}
-                onClick={() => {
-                  if (confirmDelete && confirmDelete !== project.id) setConfirmDelete(null)
-                  window.location.hash = `#/studio/${project.id}`
-                }}
+                onClick={() => open(project.id)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault()
-                    window.location.hash = `#/studio/${project.id}`
+                    open(project.id)
                   }
                 }}
               >
-                <div className="row">
-                  <h3>{project.name}</h3>
+                <Flex align="center" gap={6}>
+                  <Text strong ellipsis style={{ fontSize: 15, minWidth: 0 }}>
+                    {project.name}
+                  </Text>
                   <div className="spacer" />
-                  {project.createdBy === me ? <span className="badge accent">我创建的</span> : null}
-                  <span className="badge">{project.providerLabel || '模型生成'}</span>
-                </div>
-                <p>{project.summary || '还没有描述'}</p>
-                <footer>
-                  <span className="badge accent">v{project.version || 0}</span>
-                  <span className="badge">{project.fileCount} 文件</span>
+                  {project.createdBy === me ? <Badge tone="accent">我创建的</Badge> : null}
+                  <Badge>{project.providerLabel || '模型生成'}</Badge>
+                </Flex>
+                <Paragraph type="secondary" ellipsis={{ rows: 2 }} style={{ margin: '8px 0 12px', fontSize: 12.5 }}>
+                  {project.summary || '还没有描述'}
+                </Paragraph>
+                <Flex align="center" gap={6}>
+                  <Badge tone="accent">v{project.version || 0}</Badge>
+                  <Badge>{project.fileCount} 文件</Badge>
                   <div className="spacer" />
-                  <span className="muted" style={{ fontSize: 11.5 }}>
+                  <Text type="secondary" style={{ fontSize: 11.5 }}>
                     {timeAgo(project.updatedAt)}
-                  </span>
-                  <button
-                    className={`btn sm ghost danger${confirmDelete === project.id ? ' is-on' : ''}`}
-                    aria-label={confirmDelete === project.id ? `确认删除 ${project.name}` : `删除 ${project.name}`}
-                    title={confirmDelete === project.id ? '再点一次确认删除' : '删除项目'}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      if (confirmDelete === project.id) void remove(project.id)
-                      else setConfirmDelete(project.id)
-                    }}
+                  </Text>
+                  {/* 项目带着全部版本历史，删掉无法恢复：用二次确认换掉原来的「再点一次」状态机 */}
+                  <Popconfirm
+                    title="删除这个项目？"
+                    description="版本历史会一起删除，不可恢复。"
+                    okText="删除"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => void remove(project.id)}
                   >
-                    <IconTrash size={13} />
-                    {confirmDelete === project.id ? <span style={{ marginLeft: 4 }}>确认删除？</span> : null}
-                  </button>
-                </footer>
-              </article>
+                    <Button
+                      size="small"
+                      type="text"
+                      danger
+                      icon={<DeleteOutlined />}
+                      aria-label={`删除 ${project.name}`}
+                      onClick={(event) => event.stopPropagation()}
+                    />
+                  </Popconfirm>
+                </Flex>
+              </Card>
             ))}
           </div>
         )}

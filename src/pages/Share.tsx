@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react'
+import { Button, Flex, Result, Space, Spin, Typography } from 'antd'
+import { DownloadOutlined, ExportOutlined } from '@ant-design/icons'
 import type { ShareDetail } from '../../shared/types'
-import { Logo, Spinner, IconDownload, IconExternal } from '../components/ui'
+import { Logo } from '../components/ui'
 import { api, visitorId } from '../lib/api'
 import { injectSeed, readSeed } from '../lib/seed'
+
+const { Text } = Typography
 
 /** 分享页只展示一个可读的作者标识，不暴露完整访客 ID。 */
 function authorLabel(createdBy: string): string {
@@ -35,16 +39,17 @@ export function SharePage({ slug }: { slug: string }) {
       <div className="share">
         <div className="share-bar">
           <Logo size={22} />
-          <strong>Nucleus</strong>
+          <Text strong>Nucleus</Text>
         </div>
-        <div style={{ display: 'grid', placeItems: 'center', flex: 1 }}>
-          <div style={{ textAlign: 'center' }}>
-            <p style={{ fontWeight: 600 }}>{error}</p>
-            <a className="btn" href="#/">
+        <Result
+          status="warning"
+          title={error}
+          extra={
+            <Button type="primary" href="#/">
               去 Nucleus 做一个
-            </a>
-          </div>
-        </div>
+            </Button>
+          }
+        />
       </div>
     )
   }
@@ -54,32 +59,32 @@ export function SharePage({ slug }: { slug: string }) {
       <div className="share-bar">
         <Logo size={22} />
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 620, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <Text strong ellipsis style={{ fontSize: 13.5, display: 'block' }}>
             {data?.project.name ?? '加载中…'}
-          </div>
-          <div className="muted" style={{ fontSize: 11.5 }}>
+          </Text>
+          <Text type="secondary" style={{ fontSize: 11.5 }}>
             {data
               ? `v${data.project.version} · ${data.project.fileCount} 个文件 · ${
                   data.project.providerLabel || '模型生成'
                 } · 作者 ${authorLabel(data.project.createdBy)}`
               : ''}
-          </div>
+          </Text>
         </div>
         <div className="spacer" />
         {data ? (
-          <>
-            <a className="btn sm ghost" href={`#/studio/${data.project.id}`}>
-              <IconExternal size={13} /> 在 Studio 中打开
-            </a>
-            <a className="btn sm" href={api.exportUrl(data.project.id)}>
-              <IconDownload size={13} /> 导出
-            </a>
-          </>
+          <Space size={6}>
+            <Button size="small" type="text" href={`#/studio/${data.project.id}`} icon={<ExportOutlined />}>
+              在 Studio 中打开
+            </Button>
+            <Button size="small" icon={<DownloadOutlined />} href={api.exportUrl(data.project.id)}>
+              导出
+            </Button>
+          </Space>
         ) : (
-          <Spinner />
+          <Spin />
         )}
       </div>
-      <div className="share-frame">
+      <Flex className="share-frame" justify="center">
         {data ? (
           <iframe
             title={data.project.name}
@@ -87,7 +92,7 @@ export function SharePage({ slug }: { slug: string }) {
             srcDoc={injectSeed(data.html, readSeed(data.project.id))}
           />
         ) : null}
-      </div>
+      </Flex>
     </div>
   )
 }

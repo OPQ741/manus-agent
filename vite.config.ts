@@ -9,6 +9,16 @@ export default defineConfig({
     outDir: 'dist/client',
     emptyOutDir: true,
     target: 'es2020',
+    // antd 组件库本身就有几百 KB：拆成稳定 vendor 包，业务代码改动时浏览器缓存不失效
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom'],
+          antd: ['antd', '@ant-design/icons'],
+        },
+      },
+    },
   },
   server: {
     host: '127.0.0.1',

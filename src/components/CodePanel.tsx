@@ -1,9 +1,12 @@
 import { useMemo, useState } from 'react'
+import { Button, Empty, Flex, Space, Tabs, Typography } from 'antd'
+import { CopyOutlined, FileTextOutlined } from '@ant-design/icons'
 import type { FileEntry } from '../../shared/types'
 import { highlight, langOf } from '../lib/highlight'
-import { bytes, lineCount, shortPath } from '../lib/format'
-import { copyText } from '../lib/format'
-import { IconCopy, IconFile, toast } from './ui'
+import { bytes, copyText, lineCount, shortPath } from '../lib/format'
+import { toast } from './ui'
+
+const { Text } = Typography
 
 interface Props {
   files: FileEntry[]
@@ -20,58 +23,64 @@ export function CodePanel({ files, liveFiles, followPath }: Props) {
   }, [files, liveFiles])
 
   const [selected, setSelected] = useState<string | null>(null)
-  const activePath = followPath && merged.some((file) => file.path === followPath) ? followPath : selected ?? merged[0]?.path ?? null
-  const active = merged.find((file) => file.path === activePath) ?? null
+  // 生成中自动跟随正在写入的文件；用户手动点选优先于默认的第一项
+  const active =
+    merged.find((file) => file.path === followPath) ??
+    merged.find((file) => file.path === selected) ??
+    merged[0]
 
-  if (merged.length === 0) {
-    return (
-      <div className="empty-block" style={{ margin: 'auto' }}>
-        还没有文件。生成完成后这里会出现完整的源码。
-      </div>
-    )
+  if (!active) {
+    return <Empty className="empty-block" description="还没有文件。生成完成后这里会出现完整的源码。" />
   }
 
   return (
     <div className="code-shell">
-      <div className="file-tree" role="tablist" aria-label="文件列表">
-        {merged.map((file) => (
-          <button
-            key={file.path}
-            role="tab"
-            aria-current={file.path === activePath}
-            onClick={() => setSelected(file.path)}
-          >
-            <IconFile size={13} />
-            {shortPath(file.path)}
-          </button>
-        ))}
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <div className="code-head">
-          <span className="mono">{active?.path}</span>
-          <span className="spacer" />
-          <span>{active ? `${lineCount(active.content)} 行 · ${bytes(new Blob([active.content]).size)}` : ''}</span>
-          <button
-            className="btn sm ghost"
-            onClick={async () => {
-              if (!active) return
-              await copyText(active.content)
-              toast('已复制')
-            }}
-          >
-            <IconCopy size={13} /> 复制
-          </button>
-        </div>
-        <div className="code-view">
-          <pre>
-            <code
-              dangerouslySetInnerHTML={{
-                __html: active ? highlight(active.content, langOf(active.path)) : '',
-              }}
-            />
-          </pre>
-        </div>
-      </div>
+      {/* 左侧文件树用 Tabs 的垂直形态：键盘方向键可在文件间移动，省掉自己维护选中态的 focus 逻辑 */}
+      <Tabs
+        tabPosition="left"
+        size="small"
+        className="code-tabs"
+        activeKey={active.path}
+        onChange={(key) => setSelected(key)}
+        items={merged.map((file) => ({
+          key: file.path,
+          label: (
+            <Space size={6}>
+              <FileTextOutlined />
+              <span className="mono">{shortPath(file.path)}</span>
+            </Space>
+          ),
+          children: (
+            <div className="code-pane">
+              <Flex className="code-head" align="center" gap={10}>
+                <Text className="mono" ellipsis>
+                  {file.path}
+                </Text>
+                <div className="spacer" />
+                <Text type="secondary" style={{ fontSize: 11.5 }}>
+                  {lineCount(file.content)} 行 · {bytes(new Blob([file.content]).size)}
+                </Text>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<CopyOutlined />}
+                  onClick={async () => {
+                    await copyText(file.content)
+                    toast('已复制')
+                  }}
+                >
+                  复制
+                </Button>
+              </Flex>
+              <div className="code-view">
+                <pre>
+                  <code dangerouslySetInnerHTML={{ __html: highlight(file.content, langOf(file.path)) }} />
+                </pre>
+              </div>
+            </div>
+          ),
+        }))}
+      />
     </div>
   )
 }

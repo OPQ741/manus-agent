@@ -1,22 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Alert, Button, Card, Empty, Flex, Space, Tooltip, Typography } from 'antd'
+import {
+  CheckCircleFilled,
+  DesktopOutlined,
+  ExclamationCircleFilled,
+  ExportOutlined,
+  MobileOutlined,
+  ReloadOutlined,
+  ShareAltOutlined,
+  BgColorsOutlined,
+  TabletOutlined,
+} from '@ant-design/icons'
 import type { Check, DesignTweak } from '../../shared/types'
 import { tweakVars } from '../../shared/theme'
 import { injectSeed, readSeed } from '../lib/seed'
 import { TweakPanel } from './TweakPanel'
-import {
-  IconAlert,
-  IconCheck,
-  IconDesktop,
-  IconExternal,
-  IconMobile,
-  IconPalette,
-  IconRefresh,
-  IconShare,
-  IconTablet,
-  toast,
-} from './ui'
+import { toast } from './ui'
+
+const { Text } = Typography
 
 type Device = 'desktop' | 'tablet' | 'mobile'
+
+const DEVICES: { value: Device; label: string; icon: React.ReactNode }[] = [
+  { value: 'desktop', label: '桌面', icon: <DesktopOutlined /> },
+  { value: 'tablet', label: '平板', icon: <TabletOutlined /> },
+  { value: 'mobile', label: '手机', icon: <MobileOutlined /> },
+]
 
 interface Props {
   projectId: string
@@ -111,104 +120,141 @@ export function PreviewPanel({ projectId, html, checks, errors, tweak, onTweakSa
     }
   }
 
+  const copyShare = async () => {
+    if (!shareUrl) return
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      toast('分享链接已复制')
+    } catch {
+      toast(shareUrl)
+    }
+  }
+
   return (
     <>
       {errors.length > 0 ? (
-        <div className="error-banner" role="alert">
-          <IconAlert size={15} />
-          <span>
-            检测到 {errors.length} 个运行时错误：<span className="mono">{errors[0]?.slice(0, 90)}</span>
-          </span>
-          <button className="btn sm primary" onClick={onHeal}>
-            让 Agent 修复
-          </button>
-        </div>
+        <Alert
+          className="error-banner"
+          type="error"
+          showIcon
+          message={
+            <Text>
+              检测到 {errors.length} 个运行时错误：<Text className="mono">{errors[0]?.slice(0, 90)}</Text>
+            </Text>
+          }
+          action={
+            <Button size="small" type="primary" onClick={onHeal}>
+              让 Agent 修复
+            </Button>
+          }
+        />
       ) : null}
 
       <div className="preview-shell">
-        <div className="preview-toolbar">
-          <div className="segmented" role="group" aria-label="视口">
-            <button aria-pressed={device === 'desktop'} onClick={() => setDevice('desktop')} aria-label="桌面">
-              <IconDesktop size={14} />
-            </button>
-            <button aria-pressed={device === 'tablet'} onClick={() => setDevice('tablet')} aria-label="平板">
-              <IconTablet size={14} />
-            </button>
-            <button aria-pressed={device === 'mobile'} onClick={() => setDevice('mobile')} aria-label="手机">
-              <IconMobile size={14} />
-            </button>
-          </div>
+        <Flex className="preview-toolbar" align="center" gap={6} wrap>
+          <Space.Compact>
+            {DEVICES.map((item) => (
+              <Tooltip key={item.value} title={item.label}>
+                <Button
+                  size="small"
+                  type={device === item.value ? 'primary' : 'default'}
+                  aria-label={item.label}
+                  aria-pressed={device === item.value}
+                  icon={item.icon}
+                  onClick={() => setDevice(item.value)}
+                />
+              </Tooltip>
+            ))}
+          </Space.Compact>
+
           <div className="url-pill">
-            <span className="dot" style={{ color: '#3bb273' }} />
-            nucleus://preview/{projectId}
+            <span className="dot" />
+            <Text className="mono" style={{ fontSize: 11.5 }} ellipsis>
+              nucleus://preview/{projectId}
+            </Text>
           </div>
-          <button
-            className={`btn sm ghost ${showTweak ? 'is-on' : ''}`}
-            onClick={() => setShowTweak((value) => !value)}
-            aria-expanded={showTweak}
-            aria-label="设计微调"
-            title="设计微调：改主色 / 圆角，不用重新生成"
-          >
-            <IconPalette size={14} /> 设计
-          </button>
-          {checks.length > 0 ? (
-            <button
-              className={`health-pill ${health}`}
-              onClick={() => setShowChecks((value) => !value)}
-              aria-expanded={showChecks}
-              title="查看静态自检结果"
+
+          <div className="spacer" />
+
+          <Tooltip title="设计微调：改主色 / 圆角，不用重新生成">
+            <Button
+              size="small"
+              type={showTweak ? 'primary' : 'text'}
+              aria-label="设计微调"
+              aria-expanded={showTweak}
+              icon={<BgColorsOutlined />}
+              onClick={() => setShowTweak((value) => !value)}
             >
-              {health === 'ok' ? <IconCheck size={13} /> : <IconAlert size={13} />}
-              {healthLabel}
-            </button>
+              设计
+            </Button>
+          </Tooltip>
+
+          {checks.length > 0 ? (
+            <Tooltip title="查看静态自检结果">
+              <Button
+                size="small"
+                type="text"
+                className={`health-pill ${health}`}
+                aria-expanded={showChecks}
+                onClick={() => setShowChecks((value) => !value)}
+                icon={failed > 0 || warned > 0 ? <ExclamationCircleFilled /> : <CheckCircleFilled />}
+              >
+                {healthLabel}
+              </Button>
+            </Tooltip>
           ) : null}
-          <button
-            className="btn sm ghost"
-            onClick={() => {
-              setNonce((value) => value + 1)
-              onRefresh()
-            }}
-            aria-label="重新加载预览"
-          >
-            <IconRefresh size={14} />
-          </button>
-          <button className="btn sm ghost" onClick={openStandalone} aria-label="在新窗口打开">
-            <IconExternal size={14} />
-          </button>
-          <button
-            className="btn sm ghost"
-            disabled={!shareUrl}
-            onClick={async () => {
-              if (!shareUrl) return
-              try {
-                await navigator.clipboard.writeText(shareUrl)
-                toast('分享链接已复制')
-              } catch {
-                toast(shareUrl)
-              }
-            }}
-            aria-label="复制分享链接"
-          >
-            <IconShare size={14} />
-          </button>
-        </div>
+
+          <Tooltip title="重新加载预览">
+            <Button
+              size="small"
+              type="text"
+              aria-label="重新加载预览"
+              icon={<ReloadOutlined />}
+              onClick={() => {
+                setNonce((value) => value + 1)
+                onRefresh()
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="在新窗口打开">
+            <Button size="small" type="text" aria-label="在新窗口打开" icon={<ExportOutlined />} onClick={openStandalone} />
+          </Tooltip>
+          <Tooltip title="复制分享链接">
+            <Button
+              size="small"
+              type="text"
+              aria-label="复制分享链接"
+              disabled={!shareUrl}
+              icon={<ShareAltOutlined />}
+              onClick={() => void copyShare()}
+            />
+          </Tooltip>
+        </Flex>
 
         {showTweak ? (
           <TweakPanel tweak={draft} supportsTokens={supportsTokens} saving={saving} onChange={change} onReset={reset} />
         ) : null}
 
         {showChecks && checks.length > 0 ? (
-          <div className="health-panel">
-            {checks.map((check) => (
-              <div key={check.id} className={`health-row ${check.ok ? 'ok' : check.level}`}>
-                <span className="health-label">
-                  {check.ok ? <IconCheck size={12} /> : <IconAlert size={12} />}
-                  {check.label}
-                </span>
-                {check.detail ? <span className="health-detail">{check.detail}</span> : null}
-              </div>
-            ))}
-          </div>
+          <Card size="small" className="health-panel">
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              {checks.map((check) => (
+                <Flex key={check.id} align="flex-start" gap={7} className={`health-row ${check.ok ? 'ok' : check.level}`}>
+                  {check.ok ? (
+                    <CheckCircleFilled style={{ color: 'var(--ok)', marginTop: 3 }} />
+                  ) : (
+                    <ExclamationCircleFilled style={{ color: 'var(--warn)', marginTop: 3 }} />
+                  )}
+                  <Text style={{ fontSize: 12.5 }}>{check.label}</Text>
+                  {check.detail ? (
+                    <Text type="secondary" className="mono" style={{ fontSize: 11.5, marginLeft: 'auto' }}>
+                      {check.detail}
+                    </Text>
+                  ) : null}
+                </Flex>
+              ))}
+            </Space>
+          </Card>
         ) : null}
 
         {html ? (
@@ -224,12 +270,17 @@ export function PreviewPanel({ projectId, html, checks, errors, tweak, onTweakSa
             />
           </div>
         ) : (
-          <div className="preview-empty">
-            <div>
-              <p style={{ margin: '0 0 6px', fontWeight: 600, color: 'var(--ink)' }}>还没有可预览的内容</p>
-              <p style={{ margin: 0 }}>{blocking?.detail ?? '先在左侧描述你要的应用，Agent 会生成入口文件。'}</p>
-            </div>
-          </div>
+          <Empty
+            className="preview-empty"
+            description={
+              <Space direction="vertical" size={2}>
+                <Text strong>还没有可预览的内容</Text>
+                <Text type="secondary" style={{ fontSize: 12.5 }}>
+                  {blocking?.detail ?? '先在左侧描述你要的应用，Agent 会生成入口文件。'}
+                </Text>
+              </Space>
+            }
+          />
         )}
       </div>
     </>

@@ -1,23 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { TextAreaRef } from 'antd/es/input/TextArea'
+import { Alert, Button, Flex, Input, Result, Space, Spin, Tabs, Tooltip, Typography } from 'antd'
+import {
+  ArrowLeftOutlined,
+  CodeOutlined,
+  DownloadOutlined,
+  EyeOutlined,
+  HistoryOutlined,
+  LoadingOutlined,
+  SendOutlined,
+  ShareAltOutlined,
+  StopOutlined,
+} from '@ant-design/icons'
 import type { AgentEvent, DesignTweak, ProjectDetail, PublicSettings } from '../../shared/types'
 import { ChatStream, EMPTY_LIVE, type LiveState } from '../components/ChatStream'
 import { CodePanel } from '../components/CodePanel'
 import { PreviewPanel } from '../components/PreviewPanel'
 import { TopBar } from '../components/TopBar'
 import { VersionPanel } from '../components/VersionPanel'
-import {
-  IconAlert,
-  IconBack,
-  IconCode,
-  IconDownload,
-  IconHistory,
-  IconPlay,
-  IconSend,
-  IconShare,
-  IconStop,
-  Spinner,
-  toast,
-} from '../components/ui'
+import { Badge, toast } from '../components/ui'
 import { ApiError, api, generate } from '../lib/api'
 import { explainError } from '../lib/errors'
 import { applyStorageMessage } from '../lib/seed'
@@ -28,6 +29,14 @@ type Tab = 'preview' | 'code' | 'versions'
 
 const MAX_ERRORS = 20
 
+const STAGE_TEXT: Record<string, string> = { write: '正在写代码', verify: '正在自检' }
+
+/**
+ * 把一批 SSE 事件折进「进行中」状态。
+ *
+ * 用一次 requestAnimationFrame 批量 flush：模型一秒能吐几十个 file_delta，
+ * 逐条 setState 会让 React 在流式阶段里空转，界面反而更卡。
+ */
 function applyEvents(state: LiveState, events: AgentEvent[]): LiveState {
   let next = state
   const clone = () => ({ ...next, files: next.files.map((file) => ({ ...file })), checks: [...next.checks], warnings: [...next.warnings] })
@@ -105,13 +114,11 @@ export function StudioPage({ id }: { id: string }) {
   const [error, setError] = useState<{ code: string; message: string } | null>(null)
   const [runtimeErrors, setRuntimeErrors] = useState<string[]>([])
   const [settings, setSettings] = useState<PublicSettings | null>(null)
-  const [renaming, setRenaming] = useState(false)
-  const [nameDraft, setNameDraft] = useState('')
   const [rolling, setRolling] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
   const busyRef = useRef(false)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const inputRef = useRef<TextAreaRef>(null)
   /**
    * 最近一次失败所用的指令：错误条上的「重新生成」要用**它**重试，
    * 而不是输入框里此刻的内容（用户可能已经改了字，或者输入框是空的）。
@@ -230,7 +237,6 @@ export function StudioPage({ id }: { id: string }) {
         if (cancelled) return
         setDetail({ project: data.project, messages: data.messages, versions: data.versions })
         setPreviewHtml(data.previewHtml)
-        setNameDraft(data.project.name)
         const pending = takePendingPrompt(id)
         if (pending && data.project.files.length === 0) void run(pending)
       } catch (err) {
@@ -283,9 +289,7 @@ export function StudioPage({ id }: { id: string }) {
       .slice(0, 8)
       .map((message, index) => `${index + 1}) ${message}`)
       .join('\n')
-    void run(
-      `预览出现了以下运行时错误，请定位并修复。只输出改动过的文件，不要重写没有问题的部分：\n${list}`,
-    )
+    void run(`预览出现了以下运行时错误，请定位并修复。只输出改动过的文件，不要重写没有问题的部分：\n${list}`)
   }
 
   /**
@@ -334,12 +338,11 @@ export function StudioPage({ id }: { id: string }) {
     [id],
   )
 
-  const commitRename = async () => {
-    const name = nameDraft.trim()
-    setRenaming(false)
-    if (!name || !detail || name === detail.project.name) return
+  const rename = async (name: string) => {
+    const next = name.trim()
+    if (!next || !detail || next === detail.project.name) return
     try {
-      const { project } = await api.renameProject(id, name)
+      const { project } = await api.renameProject(id, next)
       setDetail((prev) => (prev ? { ...prev, project } : prev))
     } catch (err) {
       toast(err instanceof Error ? err.message : '重命名失败')
@@ -349,9 +352,9 @@ export function StudioPage({ id }: { id: string }) {
   if (loading) {
     return (
       <>
-        <TopBar left={<span className="muted">加载中…</span>} />
-        <div style={{ display: 'grid', placeItems: 'center', height: 'calc(100vh - 58px)' }}>
-          <Spinner />
+        <TopBar left={<Typography.Text type="secondary">加载中…</Typography.Text>} />
+        <div className="center-fill">
+          <Spin size="large" />
         </div>
       </>
     )
@@ -361,15 +364,16 @@ export function StudioPage({ id }: { id: string }) {
     return (
       <>
         <TopBar />
-        <div className="home">
-          <div className="empty-block">
-            <p style={{ margin: 0, fontWeight: 600 }}>项目不存在</p>
-            <p style={{ margin: '6px 0 14px', fontSize: 12.5 }}>{error?.message ?? '可能已经被删除了'}</p>
-            <a className="btn primary" href="#/">
+        <Result
+          status="warning"
+          title="项目不存在"
+          subTitle={error?.message ?? '可能已经被删除了'}
+          extra={
+            <Button type="primary" href="#/">
               回到首页
-            </a>
-          </div>
-        </div>
+            </Button>
+          }
+        />
       </>
     )
   }
@@ -381,51 +385,44 @@ export function StudioPage({ id }: { id: string }) {
   const canSend = !busy && input.trim().length > 0
   const errorInfo = explainError(error?.code, error?.message ?? '')
   const retryPrompt = input.trim() || lastFailedPromptRef.current || ''
+  const fileTotal = project.files.length + live.files.filter((file) => !project.files.some((item) => item.path === file.path)).length
+
+  const send = () => {
+    if (!canSend) return
+    const text = input
+    setInput('')
+    void run(text)
+  }
 
   return (
     <>
       <TopBar
         left={
-          <div className="row" style={{ gap: 8, minWidth: 0 }}>
-            <a className="btn ghost sm" href="#/" aria-label="返回首页">
-              <IconBack size={15} />
-            </a>
-            {renaming ? (
-              <input
-                autoFocus
-                value={nameDraft}
-                style={{ height: 30, width: 200 }}
-                onChange={(event) => setNameDraft(event.target.value)}
-                onBlur={() => void commitRename()}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') void commitRename()
-                  if (event.key === 'Escape') {
-                    setRenaming(false)
-                    setNameDraft(project.name)
-                  }
-                }}
-                aria-label="项目名"
-              />
-            ) : (
-              <button
-                className="btn ghost"
-                style={{ fontWeight: 600, color: 'var(--ink)', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}
-                onClick={() => setRenaming(true)}
-                title="点击重命名"
-              >
-                {project.name}
-              </button>
-            )}
-            <span className="badge accent">v{project.version}</span>
-            <span className="badge" title="这次生成用的模型通道">
-              {project.providerLabel || settings?.active?.label || '模型生成'}
-            </span>
-          </div>
+          <Flex align="center" gap={8} style={{ minWidth: 0 }}>
+            <Tooltip title="返回首页">
+              <Button type="text" size="small" href="#/" aria-label="返回首页" icon={<ArrowLeftOutlined />} />
+            </Tooltip>
+            {/* 就地改名：antd 的可编辑文本自带输入态、Enter 提交、Esc 取消，省掉一整套本地状态机 */}
+            <Typography.Text
+              strong
+              style={{ maxWidth: 260 }}
+              ellipsis={{ tooltip: project.name }}
+              editable={{ tooltip: '点击重命名', onChange: (value) => void rename(value) }}
+            >
+              {project.name}
+            </Typography.Text>
+            <Badge tone="accent">v{project.version}</Badge>
+            <Tooltip title="这次生成用的模型通道">
+              <Badge>{project.providerLabel || settings?.active?.label || '模型生成'}</Badge>
+            </Tooltip>
+          </Flex>
         }
         right={
-          <div className="row" style={{ gap: 6 }}>
-            <button
-              className="btn sm ghost"
+          <Space size={4}>
+            <Button
+              size="small"
+              type="text"
+              icon={<ShareAltOutlined />}
               onClick={async () => {
                 try {
                   await navigator.clipboard.writeText(shareUrl)
@@ -435,12 +432,12 @@ export function StudioPage({ id }: { id: string }) {
                 }
               }}
             >
-              <IconShare size={14} /> 分享
-            </button>
-            <a className="btn sm ghost" href={api.exportUrl(id)}>
-              <IconDownload size={14} /> 导出
-            </a>
-          </div>
+              分享
+            </Button>
+            <Button size="small" type="text" href={api.exportUrl(id)} icon={<DownloadOutlined />}>
+              导出
+            </Button>
+          </Space>
         }
       />
 
@@ -449,16 +446,17 @@ export function StudioPage({ id }: { id: string }) {
           <ChatStream messages={messages} live={live} pendingUser={pendingUser} />
 
           {error ? (
-            <div style={{ padding: '0 14px 8px' }}>
-              <div className="error-banner">
-                <IconAlert size={15} />
-                <div className="error-body">
-                  <strong>{errorInfo.title}</strong>
-                  <span>{errorInfo.hint}</span>
-                </div>
-                {errorInfo.action.kind !== 'none' ? (
-                  <button
-                    className="btn sm"
+            <Alert
+              className="error-banner"
+              type="error"
+              showIcon
+              style={{ margin: '0 12px 8px' }}
+              message={errorInfo.title}
+              description={errorInfo.hint}
+              action={
+                errorInfo.action.kind === 'none' ? null : (
+                  <Button
+                    size="small"
                     disabled={errorInfo.action.kind === 'retry' && !retryPrompt}
                     onClick={() => {
                       if (errorInfo.action.kind === 'settings') window.location.hash = '#/settings'
@@ -471,24 +469,24 @@ export function StudioPage({ id }: { id: string }) {
                     }}
                   >
                     {errorInfo.action.label}
-                  </button>
-                ) : null}
-              </div>
-            </div>
+                  </Button>
+                )
+              }
+            />
           ) : null}
 
           <div className="chat-composer">
             <div className="chat-input">
-              <textarea
+              <Input.TextArea
                 ref={inputRef}
+                variant="borderless"
                 value={input}
+                autoSize={{ minRows: 2, maxRows: 6 }}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
-                  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && canSend) {
+                  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
                     event.preventDefault()
-                    const text = input
-                    setInput('')
-                    void run(text)
+                    send()
                   }
                   if (event.key === 'Escape' && busy) stop()
                 }}
@@ -500,85 +498,98 @@ export function StudioPage({ id }: { id: string }) {
                 aria-label="继续描述需求"
                 disabled={busy}
               />
-              <div className="chat-input-bar">
-                <span className="stage-pill">
-                  {busy ? (
-                    <>
-                      <Spinner /> {live.stage === 'write' ? '正在写代码' : live.stage === 'verify' ? '正在自检' : '正在拆解'}
-                    </>
-                  ) : (
-                    <span className="muted">⌘/Ctrl + Enter 发送 · ⌘/Ctrl + K 聚焦</span>
-                  )}
-                </span>
+              <Flex className="chat-input-bar" align="center" gap={8}>
+                {busy ? (
+                  <Space size={6}>
+                    <Spin indicator={<LoadingOutlined spin />} size="small" />
+                    <Typography.Text type="secondary" style={{ fontSize: 11.5 }}>
+                      {STAGE_TEXT[live.stage ?? ''] ?? '正在拆解'}
+                    </Typography.Text>
+                  </Space>
+                ) : (
+                  <Typography.Text type="secondary" style={{ fontSize: 11.5 }}>
+                    ⌘/Ctrl + Enter 发送 · ⌘/Ctrl + K 聚焦
+                  </Typography.Text>
+                )}
                 <div className="spacer" />
                 {busy ? (
-                  <button className="btn sm" onClick={stop}>
-                    <IconStop size={13} /> 停止（保留已完成文件）
-                  </button>
+                  <Button size="small" icon={<StopOutlined />} onClick={stop}>
+                    停止（保留已完成文件）
+                  </Button>
                 ) : (
-                  <button
-                    className="btn primary sm"
+                  <Button
+                    type="primary"
+                    size="small"
+                    icon={<SendOutlined />}
+                    aria-label="发送"
                     disabled={!canSend}
-                    onClick={() => {
-                      const text = input
-                      setInput('')
-                      void run(text)
-                    }}
+                    onClick={send}
                   >
-                    <IconSend size={13} /> 发送
-                  </button>
+                    发送
+                  </Button>
                 )}
-              </div>
+              </Flex>
             </div>
           </div>
         </section>
 
         <section className="workspace" aria-label="工作区">
-          <div className="ws-tabs" role="tablist">
-            <button className="tab" role="tab" aria-selected={tab === 'preview'} onClick={() => setTab('preview')}>
-              <IconPlay size={13} /> 预览
-            </button>
-            <button className="tab" role="tab" aria-selected={tab === 'code'} onClick={() => setTab('code')}>
-              <IconCode size={13} /> 代码
-              <span className="badge">{project.files.length + live.files.filter((f) => !project.files.some((p) => p.path === f.path)).length}</span>
-            </button>
-            <button className="tab" role="tab" aria-selected={tab === 'versions'} onClick={() => setTab('versions')}>
-              <IconHistory size={13} /> 版本
-              <span className="badge">{versions.length}</span>
-            </button>
-            <div className="spacer" />
-            {live.running ? (
-              <span className="badge accent">
-                <Spinner /> {runningFileRef ? `写入 ${runningFileRef}` : '运行中'}
-              </span>
-            ) : null}
-          </div>
-
-          <div className="ws-body">
-            {tab === 'preview' ? (
-              <PreviewPanel
-                projectId={id}
-                html={previewHtml}
-                checks={project.checks}
-                errors={runtimeErrors}
-                tweak={project.tweak}
-                onTweakSave={saveTweak}
-                onHeal={heal}
-                onRefresh={() => void refresh()}
-                shareUrl={shareUrl}
-              />
-            ) : null}
-            {tab === 'code' ? (
-              <CodePanel
-                files={project.files}
-                liveFiles={live.files}
-                followPath={live.running ? runningFileRef : null}
-              />
-            ) : null}
-            {tab === 'versions' ? (
-              <VersionPanel versions={versions} current={project.version} onRollback={(seq) => void rollback(seq)} busy={rolling} />
-            ) : null}
-          </div>
+          <Tabs
+            className="ws-tabs"
+            activeKey={tab}
+            onChange={(key) => setTab(key as Tab)}
+            tabBarExtraContent={
+              live.running ? (
+                <Badge tone="accent">
+                  <Space size={5}>
+                    <Spin indicator={<LoadingOutlined spin />} size="small" />
+                    {runningFileRef ? `写入 ${runningFileRef}` : '运行中'}
+                  </Space>
+                </Badge>
+              ) : null
+            }
+            items={[
+              {
+                key: 'preview',
+                label: (
+                  <Space size={6}>
+                    <EyeOutlined /> 预览
+                  </Space>
+                ),
+                children: (
+                  <PreviewPanel
+                    projectId={id}
+                    html={previewHtml}
+                    checks={project.checks}
+                    errors={runtimeErrors}
+                    tweak={project.tweak}
+                    onTweakSave={saveTweak}
+                    onHeal={heal}
+                    onRefresh={() => void refresh()}
+                    shareUrl={shareUrl}
+                  />
+                ),
+              },
+              {
+                key: 'code',
+                label: (
+                  <Space size={6}>
+                    <CodeOutlined /> 代码 <Badge>{fileTotal}</Badge>
+                  </Space>
+                ),
+                children: <CodePanel files={project.files} liveFiles={live.files} followPath={live.running ? runningFileRef : null} />,
+              },
+              {
+                key: 'versions',
+                label: (
+                  <Space size={6}>
+                    <HistoryOutlined /> 版本 <Badge>{versions.length}</Badge>
+                  </Space>
+                ),
+                children: <VersionPanel versions={versions} current={project.version} onRollback={(seq) => void rollback(seq)} busy={rolling} />,
+              },
+            ]}
+          />
         </section>
       </div>
     </>
