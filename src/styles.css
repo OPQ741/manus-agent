@@ -228,7 +228,8 @@ pre {
   align-items: center;
   gap: 6px;
   height: 26px;
-  max-width: 300px;
+  /* 顶栏中段本来就是空的，把额度给够：常见标签（"免 Key · GPT-OSS 20B"）不再被截 */
+  max-width: 380px;
   padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -255,7 +256,7 @@ pre {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 108px;
+  max-width: 168px;
 }
 
 .model-btn-model {
@@ -1286,6 +1287,50 @@ pre {
   gap: 5px;
 }
 
+/*
+ * 历史消息里的自检结论。
+ *
+ * 失败项直接露出（那是唯一需要读的信息），通过项收成一句话，点开才铺全。
+ */
+.check-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.check-summary > .check-list {
+  width: auto;
+}
+
+.check-summary-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.14s ease;
+}
+
+.check-summary-note:hover {
+  color: var(--ink-soft);
+}
+
+.check-summary-note.is-ok .anticon {
+  color: var(--ok);
+}
+
+.check-summary-caret {
+  font-size: 8px;
+  opacity: 0.66;
+}
+
 .error-banner {
   margin: 0 12px 10px;
 }
@@ -2134,13 +2179,14 @@ pre {
 }
 
 .model-name {
-  font-size: 12.5px;
+  font-size: 13px;
+  font-weight: 600;
   line-height: 1.6;
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 1px 7px;
+  padding: 1px 8px;
   overflow-wrap: anywhere;
 }
 

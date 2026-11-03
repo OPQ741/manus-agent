@@ -87,10 +87,16 @@ try {
     await page.goto(BASE + '/', { waitUntil: 'networkidle' })
     await page.locator('.composer textarea').waitFor({ state: 'visible' })
     assert.deepEqual(consoleErrors, [])
-    // 首页下面的示例项目必须标注它是哪家模型生成的（不再是"本地引擎"）
-    const badges = await page.locator('.project-card .badge').allInnerTexts()
-    assert.ok(badges.some((text) => /GPT-OSS|DeepSeek|Gemini|Kimi|GLM|Qwen|模型/.test(text)), `项目卡上没有模型出处标注：${badges.join(' / ')}`)
-    assert.ok(!badges.includes('本地引擎'), '仍然出现"本地引擎"，说明本地 mock 没清干净')
+    // 首页下面的示例项目必须标注它是哪家模型生成的（不再是"本地引擎"）。
+    // 出处是卡片上的 .card-model 一行（等宽字体，模型名太长不适合当徽章），
+    // 徽章行只放版本与文件数 —— 所以这里读 .card-model，而不是 .badge。
+    const sources = (await page.locator('.project-card .card-model').allInnerTexts()).map((text) => text.trim())
+    assert.ok(
+      sources.some((text) => /GPT-OSS|DeepSeek|Gemini|Kimi|GLM|Qwen|OpenRouter|SiliconFlow/.test(text)),
+      `项目卡上没有模型出处标注：${sources.join(' / ') || '(空)'}`,
+    )
+    assert.ok(!sources.includes('本地引擎'), '仍然出现"本地引擎"，说明本地 mock 没清干净')
+    assert.ok(!sources.includes('模型生成'), '出处退回了「模型生成」兜底文案，等于没说')
   })
 
   await step('E2E-02 输入需求 → 真实模型生成可运行应用', async () => {
@@ -134,29 +140,96 @@ try {
       const type = ((await input.getAttribute('type')) ?? 'text').toLowerCase()
       if (['checkbox', 'radio', 'date', 'color', 'range', 'file'].includes(type)) continue
       if (!(await input.isVisible())) continue
+      // 金额/数量这类字段即使是 type="text"，填字母也会被业务校验拦下，
+      // 于是"提交没反应"变成一条假缺陷。按 type 与占位符双重判断。
+      const hint = `${(await input.getAttribute('placeholder')) ?? ''} ${(await input.getAttribute('name')) ?? ''}`
+      const numeric = type === 'number' || /金额|价格|数量|数目|预算|金额|amount|price|qty|count|num/i.test(hint)
       await input.scrollIntoViewIfNeeded()
-      await input.fill(type === 'number' ? numericToken : token)
+      await input.fill(numeric ? numericToken : token)
       filled += 1
     }
     assert.ok(filled > 0, '生成物里没有可填写的输入框')
 
+    // <select>（"分类"这类必填项）也要选上，否则提交会被校验拦下 ——
+    // 那时测到的是"校验文案写没写"，而不是"录入 → 落库"。
+    const selects = frame().locator('select')
+    const selectCount = await selects.count()
+    for (let i = 0; i < selectCount; i += 1) {
+      const select = selects.nth(i)
+      if (!(await select.isVisible())) continue
+      const values = await select
+        .locator('option')
+        .evaluateAll((nodes) => nodes.map((node) => node.value).filter(Boolean))
+      if (values.length > 0) await select.selectOption(values[0]).catch(() => {})
+    }
+
     const buttons = frame().locator('button, button[type="submit"], input[type="submit"]')
     const buttonCount = await buttons.count()
     assert.ok(buttonCount > 0, '生成物里没有任何按钮')
-    let clicked = false
-    for (let i = 0; i < buttonCount; i += 1) {
-      const button = buttons.nth(i)
-      if (!(await button.isVisible())) continue
-      await button.click({ timeout: 5_000 }).then(() => (clicked = true)).catch(() => {})
-      if (clicked) break
+
+    // 提交键按文案挑，而不是"第一个能点的"：生成物里通常还有主题切换、
+    // 收入/支出分段控件、删除等按钮，盲点第一个会点到分段控件上（点了当然没变化）。
+    // 找不到带提交文案的，就退到最后一个是表单最常见的布局（提交在末尾）。
+    const SUBMIT_LABEL = /保存|提交|添加|新增|记录|确定|确认|完成|记一笔|submit|save|add/i
+    /** 每次重新查：提交之后生成物会重渲染，旧的 locator 会失效。 */
+    const labelOf = async (button) =>
+      ((await button.innerText().catch(() => '')) || (await button.getAttribute('value')) || '').trim()
+    const submitNow = async () => {
+      const all = frame().locator('button, button[type="submit"], input[type="submit"]')
+      const n = await all.count()
+      let named = null
+      let lastVisible = null
+      for (let i = 0; i < n; i += 1) {
+        const button = all.nth(i)
+        if (!(await button.isVisible())) continue
+        lastVisible = button
+        const label = await labelOf(button)
+        if (!named && label && SUBMIT_LABEL.test(label)) named = button
+      }
+      const target = named ?? lastVisible
+      if (!target) return false
+      await target.click({ timeout: 5_000 }).catch(() => {})
+      return true
     }
-    assert.ok(clicked, '生成物里的按钮点不动')
+
+    assert.ok(await submitNow(), '生成物里的按钮都不可见')
 
     const marks = [token, numericToken]
     const hasMark = (text) => marks.some((mark) => text.includes(mark))
 
-    await page.waitForTimeout(800)
-    const after = await previewText()
+    await page.waitForTimeout(1_200)
+    let after = await previewText()
+
+    /*
+     * 兜底：生成物常把"分类"做成一排 chip button 而不是 <select>，
+     * 不选就被"请选择分类"拦下 —— 这时页面上没有标记，但缺陷不在应用。
+     * 逐轮补点一个短标签按钮（跳过删除/清空这类破坏性动作）再提交，
+     * 最多补四轮。断言本身不放松：标记必须真的出现并扛过刷新。
+     */
+    if (!hasMark(after)) {
+      const DESTRUCTIVE = /删|清空|清|移除|关闭|取消|重置|退出|主题|切换|收起|展开/i
+      const tried = new Set()
+      for (let attempt = 0; attempt < 4 && !hasMark(after); attempt += 1) {
+        const chips = frame().locator('button')
+        const total = await chips.count()
+        let picked = false
+        for (let i = 0; i < total; i += 1) {
+          const chip = chips.nth(i)
+          if (!(await chip.isVisible())) continue
+          const label = await labelOf(chip)
+          if (!label || label.length > 4) continue
+          if (SUBMIT_LABEL.test(label) || DESTRUCTIVE.test(label) || tried.has(label)) continue
+          tried.add(label)
+          await chip.click({ timeout: 3_000 }).catch(() => {})
+          picked = true
+          break
+        }
+        if (!picked) break
+        await submitNow()
+        await page.waitForTimeout(1_200)
+        after = await previewText()
+      }
+    }
     assert.notEqual(after, before, '点了提交按钮但页面没有任何变化，交互是假的')
     assert.ok(hasMark(after), `页面上找不到刚录入的标记 ${token} / ${numericToken}`)
 

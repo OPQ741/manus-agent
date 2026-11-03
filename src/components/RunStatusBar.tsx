@@ -57,7 +57,9 @@ export function RunStatusBar({ live, onStop }: { live: LiveState; onStop: () => 
         </span>
 
         <Tooltip title="中断这一轮；已经写完的文件会保留成新版本">
-          <Button size="small" danger icon={<StopOutlined />} onClick={onStop}>
+          {/* aria-label 与图标并存时无障碍名会变成「stop 停止」，
+              按名字定位的脚本和读屏都会被这半截英文带偏，所以显式钉死中文名 */}
+          <Button size="small" danger icon={<StopOutlined />} onClick={onStop} aria-label="停止">
             停止
           </Button>
         </Tooltip>

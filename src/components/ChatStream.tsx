@@ -187,6 +187,41 @@ export function CheckTags({ checks }: { checks: Check[] }) {
 }
 
 /**
+ * 历史消息里的自检结论：先给一句话，明细按需展开。
+ *
+ * 一次生成会留下七八条自检，全铺成绿色标签时，"这次改了哪些文件"会被挤到视线外，
+ * 每轮历史都拖长一节。通过是常态，不值得占版面；失败才是要读的那行 —— 所以
+ * 未通过项永远露出，通过项收进一句话，点开才是完整清单。
+ */
+export function CheckSummary({ checks }: { checks: Check[] }) {
+  const [open, setOpen] = useState(false)
+  const failed = checks.filter((check) => !check.ok)
+  const passed = checks.length - failed.length
+  const allOk = failed.length === 0
+
+  return (
+    <div className="check-summary">
+      {failed.length > 0 ? <CheckTags checks={failed} /> : null}
+      <button
+        type="button"
+        className={`check-summary-note${allOk ? ' is-ok' : ''}`}
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        {allOk ? <CheckCircleFilled /> : null}
+        {allOk
+          ? `${passed} 项自检全部通过`
+          : passed > 0
+            ? `其余 ${passed} 项通过`
+            : `${failed.length} 项未通过`}
+        <span className="check-summary-caret">{open ? <DownOutlined /> : <RightOutlined />}</span>
+      </button>
+      {open ? <CheckTags checks={checks} /> : null}
+    </div>
+  )
+}
+
+/**
  * 深度思考。
  *
  * 前半段是模型自己说的话（`<note>` 流），后半段是它给出的方案 JSON ——
@@ -572,7 +607,7 @@ function AgentMessage({ message }: { message: Message }) {
           </div>
         ) : null}
 
-        {Array.isArray(checks) && checks.length > 0 ? <CheckTags checks={checks as Check[]} /> : null}
+        {Array.isArray(checks) && checks.length > 0 ? <CheckSummary checks={checks as Check[]} /> : null}
 
         <Metrics usage={usage} provider={provider} version={version} />
       </div>

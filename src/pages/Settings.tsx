@@ -313,7 +313,7 @@ export function SettingsPage() {
           title="模型"
           extra={
             <Text type="secondary" style={{ fontSize: 12 }}>
-              v{settings?.version ?? '1.0.0'}
+              服务端 v{settings?.version ?? '1.0.0'}
             </Text>
           }
         >
