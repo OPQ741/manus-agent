@@ -38,7 +38,7 @@ const CHROME =
 const GEN_TIMEOUT = Number(process.env.DEMO_GEN_TIMEOUT ?? 300_000)
 const RESUME_PROJECT = process.env.DEMO_PROJECT ?? ''
 
-const PROMPT_NEW = '做一个记账应用，叫「小账本」，主色墨绿，可以记录金额、分类和备注'
+const PROMPT_NEW = '做一个记账应用，叫「小账本」，主色墨绿：一个金额输入框、一个备注输入框、一个「记一笔」按钮，记录列在下面，刷新后数据还在'
 const PROMPT_ITERATE = '在标题下面加一句说明文字，并加一个按分类的支出占比条'
 
 const started = Date.now()
