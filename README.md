@@ -257,7 +257,13 @@ npm run verify:live -- --url=https://xxx.host --code=XXXXXXX
 ```
 shared/types.ts             全系统唯一契约（AgentEvent / Project / Version / ProviderId）
 server/main.ts              进程入口（读 env、listen、信号处理）
-server/index.ts             路由 / SSE / 解析链编排 / 排队 / 故障转移 / 修复轮 / 导出 / 分享
+server/index.ts             对外入口（只再导出 createNucleusServer / settingsView，不启动）
+server/app.ts               组装：store · 模型目录 · 路由表 · 静态回退 · 统一错误出口
+server/http/router.ts       声明式路由表（pattern + methods → handler，含 404/405 语义）
+server/http/                respond（JSON/限流）· static（SPA 回退）· sse（帧与中断）· errors
+server/routes/              health · settings · projects · generate · export · share（取参 → 校验 → 回包）
+server/services/generation.ts  解析链故障转移 / 排队 / 修复轮 / 中断保留 / 落库
+server/services/             settings-view（设置投影 + 入参清洗）· preview（文件 → 可运行 HTML）
 server/agent/providers.ts   模型通道目录 + Key 解析 + 解析链
 server/agent/queue.ts       按提供方的配额闸门
 server/agent/protocol.ts    NWF 增量状态机
