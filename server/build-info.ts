@@ -24,17 +24,20 @@ const UNKNOWN: BuildMeta = {
   builtAt: '',
 }
 
-function fromEnv(): BuildMeta | null {
+function fromEnv(): Partial<BuildMeta> | null {
   const commit = process.env.NUCLEUS_COMMIT?.trim()
   if (!commit) return null
-  return {
-    version: process.env.NUCLEUS_VERSION?.trim() || UNKNOWN.version,
-    commit: commit.slice(0, 12),
-    commitFull: commit,
-    branch: process.env.NUCLEUS_BRANCH?.trim() || 'unknown',
-    dirty: process.env.NUCLEUS_DIRTY === '1',
-    builtAt: process.env.NUCLEUS_BUILT_AT?.trim() || '',
-  }
+  const out: Partial<BuildMeta> = { commitFull: commit, commit: commit.slice(0, 7) }
+  // 只覆盖显式给了值的字段：平台通常只传 commit，剩下的（构建时间、分支）
+  // 应该回落到 dist/build.json，而不是被空值抹掉。
+  const version = process.env.NUCLEUS_VERSION?.trim()
+  if (version) out.version = version
+  const branch = process.env.NUCLEUS_BRANCH?.trim()
+  if (branch) out.branch = branch
+  const builtAt = process.env.NUCLEUS_BUILT_AT?.trim()
+  if (builtAt) out.builtAt = builtAt
+  if (process.env.NUCLEUS_DIRTY) out.dirty = process.env.NUCLEUS_DIRTY === '1'
+  return out
 }
 
 function candidates(): string[] {
@@ -48,12 +51,12 @@ function candidates(): string[] {
   ]
 }
 
-function fromFile(): BuildMeta | null {
+function fromFile(): Partial<BuildMeta> | null {
   for (const file of candidates()) {
     try {
       const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<BuildMeta>
       if (!parsed || typeof parsed.commit !== 'string' || !parsed.commit) continue
-      return { ...UNKNOWN, ...parsed, commit: parsed.commit }
+      return parsed
     } catch {
       /* 换下一个候选路径 */
     }
@@ -63,9 +66,17 @@ function fromFile(): BuildMeta | null {
 
 let cached: BuildMeta | null = null
 
-/** 进程内缓存：构建指纹在一次运行里不会变，没必要每个请求都读盘。 */
+/**
+ * 环境变量与文件逐字段合并：环境变量优先（它能声明"这次部署的是哪个提交"），
+ * 缺的字段回落到文件。以前是"有环境变量就整个用它"，于是平台只传了 commit 时，
+ * 构建时间和分支一起变成空值 —— 页面上看起来像"不知道为什么没有时间"。
+ */
 export function readBuildMeta(): BuildMeta {
-  if (!cached) cached = fromEnv() ?? fromFile() ?? UNKNOWN
+  if (!cached) {
+    const file = fromFile()
+    const env = fromEnv()
+    cached = file || env ? { ...UNKNOWN, ...(file ?? {}), ...(env ?? {}) } : UNKNOWN
+  }
   return cached
 }
 

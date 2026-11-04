@@ -32,8 +32,14 @@ const BUILD = readBuildMeta()
 export default defineConfig({
   plugins: [react()],
   define: {
-    /** 前端自己这份产物的指纹：设置页用它和服务端 /api/health 的 build 对齐 */
-    __BUILD__: JSON.stringify(BUILD),
+    /**
+     * 只把提交信息注入前端，不注入构建时间。
+     *
+     * 构建时间每次构建都不同，一旦进了 bundle，同一份源码产出的文件名（内容哈希）
+     * 每次都会变：缓存全失效，而且"资源名相同 = 同版"这个判据永远不成立。
+     * 构建时间由服务端从 dist/build.json 提供，前端没必要自己存一份。
+     */
+    __BUILD__: JSON.stringify({ commit: BUILD.commit, commitFull: BUILD.commitFull }),
   },
   build: {
     outDir: 'dist/client',

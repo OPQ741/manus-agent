@@ -19,7 +19,14 @@ const FALLBACK: BuildMeta = {
   builtAt: '',
 }
 
-export const BUILD: BuildMeta = typeof __BUILD__ === 'object' && __BUILD__ ? __BUILD__ : FALLBACK
+/**
+ * 前端只拿到提交信息（vite 只注入 commit / commitFull）——
+ * 构建时间不进 bundle，否则同一份源码每次构建的产物哈希都不同。
+ */
+export const BUILD: BuildMeta = {
+  ...FALLBACK,
+  ...(typeof __BUILD__ === 'object' && __BUILD__ ? __BUILD__ : {}),
+}
 
 function stamp(iso: string): string {
   const date = new Date(iso)
@@ -48,9 +55,15 @@ export function describeBuild(meta: BuildMeta | null | undefined): string {
     .join('\n')
 }
 
-/** 前后端是不是同一次构建：commit 与构建时间都相同才算。 */
+/**
+ * 前后端是不是同一次部署。
+ *
+ * 只比 commit：前后端是同一次构建产出的，提交相同就是同版；
+ * 构建时间会因为"本地打一次、平台 prestart 再打一次"而必然不同，
+ * 把它算进判据只会制造假警报。
+ */
 export function sameBuild(a: BuildMeta | null | undefined, b: BuildMeta | null | undefined): boolean {
   if (!a || !b) return false
-  if (a.commit === 'unknown' || b.commit === 'unknown') return false
-  return a.commitFull === b.commitFull && a.builtAt === b.builtAt
+  if (!a.commitFull || a.commitFull === 'unknown' || !b.commitFull || b.commitFull === 'unknown') return false
+  return a.commitFull === b.commitFull
 }
