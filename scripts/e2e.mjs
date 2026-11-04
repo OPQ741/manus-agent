@@ -331,6 +331,26 @@ try {
     assert.ok(text.length > 20, '分享页的预览是空的')
     // 分享页顶栏要标出是哪家模型生成的
     assert.match(await share.locator('.share-bar').innerText(), /GPT-OSS|DeepSeek|Gemini|Kimi|GLM|Qwen|模型生成/)
+
+    /*
+     * 分享页的持久化闭环。之前这里少了桥接的接收端：在分享页里新增一条记录，
+     * 界面上立刻变成 50，刷新就退回 20（写入只进了 iframe 的内存 shim）。
+     * 用探针键验证，不依赖生成物具体存什么。
+     */
+    const probeKey = 'nucleus:e2e-share'
+    const probeValue = JSON.stringify([{ amount: 30 }])
+    await shareFrame
+      .locator('body')
+      .evaluate((_el, [key, value]) => localStorage.setItem(key, value), [probeKey, probeValue])
+    await share.waitForTimeout(400)
+    const seed = await share.evaluate((key) => localStorage.getItem(key), `nucleus.seed.${projectId}`)
+    assert.ok(seed?.includes(probeKey), `分享页写入没有落盘：${seed ?? '(空)'}`)
+    await share.reload({ waitUntil: 'networkidle' })
+    const restored = await share
+      .frameLocator('iframe')
+      .locator('body')
+      .evaluate((_el, key) => localStorage.getItem(key), probeKey)
+    assert.equal(restored, probeValue, '分享页刷新后数据丢了')
     await share.close()
   })
 

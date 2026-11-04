@@ -38,12 +38,35 @@ try {
   /* 没有 package.json 也不该让构建挂掉 */
 }
 
+/**
+ * 上一份产物里的指纹。
+ *
+ * 发布平台通常只拿到源码包、没有 .git，`git rev-parse` 在那里会失败。
+ * 而部署包里带着的 dist/build.json 是**同一次源码构建**的产物，它的 commit
+ * 就是这份源码的 commit —— 所以 git 不可用时继承它，而不是把指纹写成 unknown。
+ * 若连这份文件也没有，才诚实地写 unknown（那确实无从得知）。
+ */
+let previous = null
+try {
+  previous = JSON.parse(readFileSync(join(ROOT, 'dist', 'build.json'), 'utf8'))
+} catch {
+  /* 首次构建 */
+}
+
+const envCommit = process.env.NUCLEUS_COMMIT?.trim() || ''
+const inGit = Boolean(git('rev-parse --is-inside-work-tree', ''))
+const commitFull = git('rev-parse HEAD', '') || envCommit || previous?.commitFull || 'unknown'
+const commit = commitFull === 'unknown' ? 'unknown' : commitFull.slice(0, 7)
+const branch = git('rev-parse --abbrev-ref HEAD', '') || process.env.NUCLEUS_BRANCH?.trim() || previous?.branch || 'unknown'
+/** 没有 git 时无法判断工作区是否干净：沿用上一份产物的结论，而不是乐观地报 false。 */
+const dirty = inGit ? git('status --porcelain', '').length > 0 : process.env.NUCLEUS_DIRTY === '1' || Boolean(previous?.dirty)
+
 const meta = {
   version,
-  commit: git('rev-parse --short HEAD', 'unknown'),
-  commitFull: git('rev-parse HEAD', 'unknown'),
-  branch: git('rev-parse --abbrev-ref HEAD', 'unknown'),
-  dirty: git('status --porcelain', '').length > 0,
+  commit,
+  commitFull,
+  branch,
+  dirty,
   builtAt: new Date().toISOString(),
 }
 

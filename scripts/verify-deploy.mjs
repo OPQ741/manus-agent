@@ -123,6 +123,7 @@ console.log(`  构建   ${short(localBuild)}`)
 console.log(`  资源   ${localAssets.join(', ') || '(还没构建过：npm run build)'}`)
 
 const problems = []
+const notes = []
 if (!liveBuild) problems.push('线上没有构建指纹 —— 说明部署的是一份 build-meta 之前的老产物')
 if (!localBuild) problems.push('本地没有 dist/build.json —— 先跑一次 npm run build')
 if (liveAssets.length === 0) problems.push('线上首页没解析到任何 /assets 资源，无法比对')
@@ -132,7 +133,12 @@ if (liveBuild && localBuild) {
   if (liveBuild.commitFull !== localBuild.commitFull) {
     problems.push(`提交不同：线上 ${liveBuild.commit} ≠ 本地 ${localBuild.commit}`)
   } else if (liveBuild.builtAt !== localBuild.builtAt) {
-    problems.push(`提交相同但构建时间不同：线上 ${liveBuild.builtAt} ≠ 本地 ${localBuild.builtAt}`)
+    /*
+     * 同一提交在两台机器上各构建一次是常态（本地打一次、平台 prestart 再打一次），
+     * 构建时间必然不同，但产物内容由源码决定。所以时间差异只作提示，
+     * 真正的同版判据是下面那行资源哈希。
+     */
+    notes.push(`构建时间不同（线上 ${liveBuild.builtAt} / 本地 ${localBuild.builtAt}）—— 同提交重建，内容一致即可`)
   }
 }
 
@@ -143,7 +149,8 @@ if (liveAssets.length && localAssets.length && (missing.length || extra.length))
 }
 
 if (problems.length === 0) {
-  console.log('\n✓ 同版：线上产物与本地 dist 来自同一次构建\n')
+  if (notes.length) for (const note of notes) console.log(`\n提示：${note}`)
+  console.log('\n✓ 同版：线上产物与本地 dist 来自同一份源码\n')
   process.exit(0)
 }
 
