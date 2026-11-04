@@ -14,7 +14,6 @@ import {
   LoadingOutlined,
   RightOutlined,
   SafetyCertificateOutlined,
-  ThunderboltOutlined,
   WarningOutlined,
 } from '@ant-design/icons'
 import type { Check, Message, Plan, ProviderInfo, Usage } from '../../shared/types'
@@ -95,6 +94,12 @@ const STAGE_ICON: Record<RunStage, React.ReactNode> = {
 function fmtChars(chars: number): string {
   if (chars >= 1000) return `${(chars / 1000).toFixed(1)}k 字符`
   return `${chars} 字符`
+}
+
+/** 7519 读起来要数位数，7.5k 不用。同上，小于一千就不加单位 */
+function fmtTokens(tokens: number): string {
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k tokens`
+  return `${tokens} tokens`
 }
 
 /** 运行中的秒表：只在 running 时开 timer，停下就别再让 React 每秒空转。 */
@@ -362,8 +367,14 @@ function PendingFileRow({ path, purpose }: { path: string; purpose?: string }) {
   )
 }
 
-function Metrics({ usage, provider, version }: { usage: Usage | null; provider: ProviderInfo | null; version?: number }) {
-  if (!usage && !provider) return null
+/**
+ * 一轮的账单：版本 / 耗时 / 字符 / tokens。
+ *
+ * 模型名不在这里 —— 它已经挂在标题右侧了，同一行信息出现两次只会让人确认两次。
+ * 这里只回答"这轮花了多少"，模型是"谁回答的"，两件事各归各位。
+ */
+function Metrics({ usage, version }: { usage: Usage | null; version?: number }) {
+  if (!usage && !version) return null
   return (
     <div className="run-metrics">
       {version ? <span className="run-metric">v{version}</span> : null}
@@ -373,12 +384,7 @@ function Metrics({ usage, provider, version }: { usage: Usage | null; provider: 
         </span>
       ) : null}
       {usage?.chars ? <span className="run-metric">{fmtChars(usage.chars)}</span> : null}
-      {usage?.tokens ? <span className="run-metric">{usage.tokens} tokens</span> : null}
-      {provider ? (
-        <span className="run-metric model" title={`${provider.label} · ${provider.model}`}>
-          <ThunderboltOutlined /> <span className="mono">{provider.model}</span>
-        </span>
-      ) : null}
+      {usage?.tokens ? <span className="run-metric">{fmtTokens(usage.tokens)}</span> : null}
     </div>
   )
 }
@@ -554,7 +560,13 @@ function AgentMessage({ message }: { message: Message }) {
   const checks = message.meta?.checks
   const changed = message.meta?.changed
   const version = typeof message.meta?.version === 'number' ? (message.meta.version as number) : undefined
-  const role = message.kind === 'error' ? 'runtime' : plan ? 'planner' : 'agent'
+  /**
+   * 一条消息只有一个说话人。
+   *
+   * 之前带方案的消息会换成"规划"头像：同一个人、同一个名字，头像却换个颜色，
+   * 读起来像两个人交替发言。方案与否由下面的「深度思考」卡表达，头像只负责"谁在说"。
+   */
+  const role = message.kind === 'error' ? 'runtime' : 'agent'
 
   if (message.kind === 'notice' && !plan) {
     return (
@@ -575,8 +587,9 @@ function AgentMessage({ message }: { message: Message }) {
       <header className="turn-head">
         <AgentAvatar role={role} size={26} />
         <div className="turn-who">
+          {/* 副标题那条"方案 · 编码 · 自检"每条消息都一模一样，说了四遍等于没说，
+              还把模型名挤到边角 —— 身份靠名字，具体做了什么看下面 */}
           <span className="turn-name">{message.kind === 'error' ? '运行时' : 'Nucleus Agent'}</span>
-          {plan ? <span className="turn-sub">方案 · 编码 · 自检</span> : null}
         </div>
         <div className="spacer" />
         {provider ? (
@@ -609,7 +622,7 @@ function AgentMessage({ message }: { message: Message }) {
 
         {Array.isArray(checks) && checks.length > 0 ? <CheckSummary checks={checks as Check[]} /> : null}
 
-        <Metrics usage={usage} provider={provider} version={version} />
+        <Metrics usage={usage} version={version} />
       </div>
     </article>
   )

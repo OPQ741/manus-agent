@@ -1,11 +1,11 @@
 import { useEffect } from 'react'
 import { App as AntdApp, Tag } from 'antd'
 import {
-  BugOutlined,
-  CodeOutlined,
-  CompassOutlined,
-  SafetyCertificateOutlined,
-  ThunderboltOutlined,
+  BugFilled,
+  CodeFilled,
+  CompassFilled,
+  SafetyCertificateFilled,
+  ThunderboltFilled,
   UserOutlined,
 } from '@ant-design/icons'
 
@@ -51,22 +51,56 @@ export function Logo({ size = 26 }: { size?: number }) {
 /**
  * 对话里的"谁在说话"。
  *
- * 生成过程其实有四个角色在同一轮里交替出现：规划（给方案）、编码（写文件）、
- * 自检（跑静态校验）、运行时（预览里的报错）。以前它们全都叫 "Nucleus Agent"，
- * 一段长输出读下来分不清哪句是判断、哪句是结果。用头像 + 角色色把这件事
- * 变成"一眼扫过去"就能分辨的视觉信号 —— 和 CLI Agent（Claude Code / Codex）
- * 打印 [plan] / [write] / [check] 是同一种信息设计。
+ * 上一版的问题不是"没区分"，而是**区分靠色相**：用户和 Agent 都是紫色渐变方块、
+ * 白色图标，26px 下只剩两块紫，扫一眼分不出对面是谁；规划 / 编码 / 自检又各是一种
+ * 渐变，白图标压在饱和底上、笔画只有 1px，远看是一团糊。
+ *
+ * 现在改成按**层级**区分，而不是按色相堆渐变：
+ *  - 用户 = 中性浅底 + 深墨图标：低饱和、不抢戏，只表示"这是我说的"；
+ *  - Agent = 唯一一块实心品牌色，核标用粗笔画白色，26px 也认得出；
+ *  - 运行时 / 出处等异常分支 = 浅色底 + 同色系实底图标，是"提示"而非"另一个人"。
+ *
+ * 颜色全部落在 CSS（`.agent-avatar.role-*`）里，深色主题才有得改；
+ * 这里只负责挑图标和尺寸。
  */
 export type AgentRole = 'user' | 'agent' | 'planner' | 'coder' | 'verifier' | 'runtime' | 'model'
 
-const ROLES: Record<AgentRole, { label: string; icon: React.ReactNode; bg: string }> = {
-  user: { label: '你', icon: <UserOutlined />, bg: 'linear-gradient(135deg, #7A6BFF, #4B3BFF)' },
-  agent: { label: 'Nucleus Agent', icon: null, bg: 'linear-gradient(135deg, #2A2A3A, #14141A)' },
-  planner: { label: '规划', icon: <CompassOutlined />, bg: 'linear-gradient(135deg, #9B7BFF, #6C4BF5)' },
-  coder: { label: '编码', icon: <CodeOutlined />, bg: 'linear-gradient(135deg, #4FA8FF, #2563C9)' },
-  verifier: { label: '自检', icon: <SafetyCertificateOutlined />, bg: 'linear-gradient(135deg, #2FBF95, #0F7A5A)' },
-  runtime: { label: '运行时', icon: <BugOutlined />, bg: 'linear-gradient(135deg, #E1677F, #C2405C)' },
-  model: { label: '模型', icon: <ThunderboltOutlined />, bg: 'linear-gradient(135deg, #E0A44A, #A9651F)' },
+const ROLES: Record<AgentRole, { label: string; icon: React.ReactNode }> = {
+  user: { label: '你', icon: <UserOutlined /> },
+  agent: { label: 'Nucleus Agent', icon: null },
+  planner: { label: '规划', icon: <CompassFilled /> },
+  coder: { label: '编码', icon: <CodeFilled /> },
+  verifier: { label: '自检', icon: <SafetyCertificateFilled /> },
+  runtime: { label: '运行时', icon: <BugFilled /> },
+  model: { label: '模型', icon: <ThunderboltFilled /> },
+}
+
+/**
+ * 头像里的核标。
+ *
+ * 顶栏那枚 Logo 是展示用的：13 半径的细轨道 + 品牌渐变，缩到 16px 就成了一团灰。
+ * 这里换成"少一条轨道、加粗描边、纯 currentColor"的紧凑版 —— 小尺寸下读得出是原子。
+ */
+function NucleusMark({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      {/* 26px 下轨道和核心会糊成一个白点：轨道略透（0.9）、更细（1.5），
+          并把它拉到 ry 4.7 让出中间的空隙，核心才分得出来 */}
+      <ellipse cx="12" cy="12" rx="9.3" ry="4.7" fill="none" stroke="currentColor" strokeOpacity="0.9" strokeWidth="1.5" />
+      <ellipse
+        cx="12"
+        cy="12"
+        rx="9.3"
+        ry="4.7"
+        fill="none"
+        stroke="currentColor"
+        strokeOpacity="0.9"
+        strokeWidth="1.5"
+        transform="rotate(70 12 12)"
+      />
+      <circle cx="12" cy="12" r="2.7" fill="currentColor" />
+    </svg>
+  )
 }
 
 export function AgentAvatar({ role, size = 24, title }: { role: AgentRole; size?: number; title?: string }) {
@@ -75,13 +109,13 @@ export function AgentAvatar({ role, size = 24, title }: { role: AgentRole; size?
   return (
     <span
       className={`agent-avatar role-${role}`}
-      style={{ width: size, height: size, borderRadius: radius, background: meta.bg, fontSize: Math.round(size * 0.52) }}
+      style={{ width: size, height: size, borderRadius: radius, fontSize: Math.round(size * 0.5) }}
       title={title ?? meta.label}
       aria-label={meta.label}
       role="img"
     >
-      {/* Agent 本人用品牌 Logo，其余角色用图标 —— 主控与执行者不能长得一样 */}
-      {role === 'agent' ? <Logo size={Math.round(size * 0.74)} /> : meta.icon}
+      {/* Agent 本人用核标，其余角色用实底图标 —— 主控与执行者不能长得一样 */}
+      {role === 'agent' ? <NucleusMark size={Math.round(size * 0.66)} /> : meta.icon}
     </span>
   )
 }

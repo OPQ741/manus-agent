@@ -144,9 +144,6 @@ export function HomePage() {
             aria-label="描述你想要的应用"
           />
           <Flex align="center" gap={10} className="composer-bar">
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              ⌘/Ctrl + Enter
-            </Text>
             <div className="spacer" />
             <Button type="primary" size="large" loading={busy} icon={<SendOutlined />} onClick={() => void start()}>
               生成应用

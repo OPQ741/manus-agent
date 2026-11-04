@@ -591,28 +591,17 @@ export function StudioPage({ id }: { id: string }) {
                 disabled={busy}
               />
               <Flex className="chat-input-bar" align="center" gap={8}>
-                {busy ? (
-                  <Typography.Text type="secondary" style={{ fontSize: 11.5 }}>
-                    生成中，输入框暂时锁定 · 按 Esc 也可停止
-                  </Typography.Text>
-                ) : (
-                  <Typography.Text type="secondary" style={{ fontSize: 11.5 }}>
-                    ⌘/Ctrl + Enter 发送 · ⌘/Ctrl + K 聚焦
-                  </Typography.Text>
-                )}
                 <div className="spacer" />
-                {busy ? null : (
-                  <Button
-                    type="primary"
-                    size="small"
-                    icon={<SendOutlined />}
-                    aria-label="发送"
-                    disabled={!canSend}
-                    onClick={send}
-                  >
-                    发送
-                  </Button>
-                )}
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<SendOutlined />}
+                  aria-label="发送"
+                  disabled={!canSend}
+                  onClick={send}
+                >
+                  发送
+                </Button>
               </Flex>
             </div>
           </div>

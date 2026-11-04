@@ -139,17 +139,20 @@ pre {
 
 /*
  * 角色头像：对话里"谁在说话"的第一眼信号。
- * Agent 本人用品牌 Logo，其余角色用同尺寸的渐变方块 + 图标 —— 形状一致、颜色区分，
- * 扫一眼就知道哪句是判断、哪句是执行结果。
+ *
+ * 只靠色相区分是不够的：用户和 Agent 都是紫色渐变 + 白图标时，26px 下就是两块紫。
+ * 这里改成"层级"区分 —— 用户是中性浅底（不抢戏），Agent 是全屏唯一的实心品牌色，
+ * 运行时 / 出处这类分支是浅色底 + 同色系实底图标。深色主题只换变量。
  */
 .agent-avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  color: #fff;
+  color: var(--avatar-ink, #fff);
+  background: var(--avatar-bg, var(--bg-soft));
   line-height: 1;
-  box-shadow: 0 0 0 1px rgba(20, 20, 26, 0.06);
+  box-shadow: inset 0 0 0 1px var(--avatar-ring, transparent);
   user-select: none;
 }
 
@@ -157,8 +160,90 @@ pre {
   line-height: 1;
 }
 
-[data-theme='dark'] .agent-avatar {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+.agent-avatar svg {
+  display: block;
+}
+
+/* 你：中性浅底 + 深墨人像 —— 位置在右、饱和度最低，永远不会和 Agent 混淆 */
+.agent-avatar.role-user {
+  --avatar-bg: #eceae6;
+  --avatar-ink: #3d3d47;
+  --avatar-ring: rgba(20, 20, 26, 0.05);
+}
+
+/* Agent：唯一的实心品牌色块，白核标加粗，小尺寸也认得出 */
+.agent-avatar.role-agent {
+  --avatar-bg: linear-gradient(145deg, #6a5cff, #4030ee);
+  --avatar-ink: #ffffff;
+  --avatar-ring: rgba(75, 59, 255, 0.18);
+}
+
+/* 阶段角色：浅底 + 同色系实底图标。是"标签"不是"另一个人"，所以不再用饱和渐变 */
+.agent-avatar.role-planner {
+  --avatar-bg: #eeeaff;
+  --avatar-ink: #5b45e0;
+  --avatar-ring: rgba(91, 69, 224, 0.16);
+}
+
+.agent-avatar.role-coder {
+  --avatar-bg: #e8f1ff;
+  --avatar-ink: #1f66c9;
+  --avatar-ring: rgba(31, 102, 201, 0.16);
+}
+
+.agent-avatar.role-verifier {
+  --avatar-bg: #e4f6ee;
+  --avatar-ink: #0c7454;
+  --avatar-ring: rgba(12, 116, 84, 0.16);
+}
+
+.agent-avatar.role-runtime {
+  --avatar-bg: #fde9ee;
+  --avatar-ink: #b53a55;
+  --avatar-ring: rgba(181, 58, 85, 0.16);
+}
+
+.agent-avatar.role-model {
+  --avatar-bg: #fbf0dd;
+  --avatar-ink: #95601c;
+  --avatar-ring: rgba(149, 96, 28, 0.16);
+}
+
+/* 深色主题：浅底要换成透明的同色系，否则一块白方块压在暗界面里格外刺眼 */
+[data-theme='dark'] .agent-avatar.role-user {
+  --avatar-bg: #2c2c36;
+  --avatar-ink: #dcdce6;
+  --avatar-ring: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] .agent-avatar.role-planner {
+  --avatar-bg: rgba(124, 102, 255, 0.2);
+  --avatar-ink: #b7a6ff;
+  --avatar-ring: rgba(124, 102, 255, 0.26);
+}
+
+[data-theme='dark'] .agent-avatar.role-coder {
+  --avatar-bg: rgba(64, 140, 255, 0.2);
+  --avatar-ink: #8cc0ff;
+  --avatar-ring: rgba(64, 140, 255, 0.26);
+}
+
+[data-theme='dark'] .agent-avatar.role-verifier {
+  --avatar-bg: rgba(47, 191, 149, 0.18);
+  --avatar-ink: #6fdcb8;
+  --avatar-ring: rgba(47, 191, 149, 0.26);
+}
+
+[data-theme='dark'] .agent-avatar.role-runtime {
+  --avatar-bg: rgba(225, 103, 127, 0.2);
+  --avatar-ink: #ff9fb2;
+  --avatar-ring: rgba(225, 103, 127, 0.26);
+}
+
+[data-theme='dark'] .agent-avatar.role-model {
+  --avatar-bg: rgba(224, 164, 74, 0.2);
+  --avatar-ink: #e8b979;
+  --avatar-ring: rgba(224, 164, 74, 0.26);
 }
 
 .diff-add {
@@ -374,12 +459,17 @@ pre {
 }
 
 .model-option:hover {
-  background: var(--bg-soft);
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
 }
 
+/*
+ * 选中态是"当前这一项"的标记，不是弹层里最重的一块。
+ * 原来的 --accent-soft 铺满整行 + 主色描边，在白底弹层里像被深色块压住；
+ * 改成一层很淡的主色染 + 更柔的描边，选中感靠对勾和描边承担。
+ */
 .model-option.is-on {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
 }
 
 .model-option-main {
@@ -741,6 +831,11 @@ pre {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * 模型出处：标题右侧的一枚轻问句"这轮是谁答的"。
+ * 以前是 --bg-soft 的灰底，在白色对话流里像一块压深的补丁；改成描边胶囊，
+ * 与下方面板里的灰色小标签拉开层次。
+ */
 .turn-model {
   font-size: 10.5px;
   color: var(--muted);
@@ -748,9 +843,10 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 1px 6px;
+  padding: 0 6px;
   border-radius: 5px;
-  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  background: var(--surface);
 }
 
 .turn-body {
@@ -1092,10 +1188,15 @@ pre {
 
 /* ------------------------------ 深度思考 -------------------------------- */
 
+/*
+ * 折叠条只说明"这里有一层可展开的推理"，不该比正文更重。
+ * 上一版用 --bg-soft（暖灰）铺满整块，在白色对话流里是最深的一块色，
+ * 视线先落到这条灰带上而不是标题；现在压到接近表面色的主色淡染。
+ */
 .thought {
   border: 1px solid var(--line);
   border-radius: var(--bubble-radius);
-  background: var(--bg-soft);
+  background: color-mix(in srgb, var(--accent) 3%, var(--surface));
   overflow: hidden;
 }
 
@@ -1238,11 +1339,15 @@ pre {
   align-self: center;
 }
 
+/*
+ * 一轮的账单：v6 · 14s · 3.2k 字符 · 7.5k tokens。
+ * 用「·」分隔而不是靠 10px 的词间距：长数字并排时，间距读不出"这是几项"。
+ */
 .run-metrics {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 0;
   font-size: 10.5px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -1254,8 +1359,10 @@ pre {
   gap: 4px;
 }
 
-.run-metric.model {
-  color: var(--ink-soft);
+.run-metric + .run-metric::before {
+  content: '·';
+  margin: 0 6px;
+  color: var(--line-strong);
 }
 
 .live-dot {
@@ -1374,10 +1481,11 @@ pre {
   resize: none;
 }
 
+/* 输入框底部只剩一个发送按钮：不再放键盘提示（不读也知道，读了也没用），
+   也不再画一条横贯的虚线分隔 —— 一条线上只有右侧一个元素时，那道线只是噪音 */
 .chat-input-bar {
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--line);
+  margin-top: 2px;
+  padding-top: 0;
 }
 
 /* --------------------------- 生成状态条（唯一出口） -------------------------- */
