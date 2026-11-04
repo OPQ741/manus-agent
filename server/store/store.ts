@@ -258,6 +258,9 @@ export class Store {
     const project = this.getProject(id)
     if (!project) return null
     Object.assign(project, patch)
+    // 用户亲手改过的元信息上锁：此后的生成（含"只改样式"）不再覆盖它，见 commit()
+    if (typeof patch.name === 'string') project.nameLocked = true
+    if (typeof patch.summary === 'string') project.summaryLocked = true
     // tweak 允许被显式清除（前端点"恢复默认"）：undefined 必须真的把键删掉，
     // 否则 JSON 里会留下一个 null，回读时又变成"有微调"。
     if ('tweak' in patch && patch.tweak === undefined) delete project.tweak
@@ -314,6 +317,16 @@ export class Store {
     const project = this.getProject(projectId)
     if (!project) return null
 
+    /**
+     * 只有首轮（项目还没有任何文件）才允许用本轮方案给项目定名。
+     *
+     * 之前这里是无条件覆盖，于是"把主色换成墨绿"这种编辑轮也会带一个方案，
+     * 而编辑轮方案的名字要么是模型重新起的，要么是占位方案从指令里截出来的
+     * （详见 runner.ts 的 placeholderPlan）—— 用户刚在设置里改好的项目名，
+     * 就被自己的一句样式指令冲掉了。名称是用户资产，不该由"改个颜色"顺手改掉。
+     */
+    const firstCommit = project.files.length === 0
+
     const previous = new Map(project.files.map((file) => [file.path, file.content]))
     const changed = input.files
       .filter((file) => previous.get(file.path) !== file.content)
@@ -330,8 +343,13 @@ export class Store {
       project.providerLabel = input.provider.label
       if (input.provider.model) project.providerModel = input.provider.model
     }
-    if (input.plan?.name) project.name = input.plan.name
-    if (input.plan?.summary) project.summary = input.plan.summary
+    if (input.plan?.name && firstCommit && !project.nameLocked) project.name = input.plan.name
+    if (input.plan?.summary && firstCommit && !project.summaryLocked) project.summary = input.plan.summary
+    // 名称以 project.name 为唯一真相：方案里的 name 只是"这一轮模型怎么称呼它"，
+    // 回写成一致的值，避免下一轮的上下文里出现两个不同的应用名。
+    if (project.plan && project.plan.name !== project.name) {
+      project.plan = { ...project.plan, name: project.name }
+    }
 
     const version: Version = {
       id: newVersionId(),
@@ -396,7 +414,7 @@ export class Store {
    * 只含"访客自己填的那一份"：目录（providers）与实际生效的通道（active）由
    * HTTP 层用 ProviderCatalog 补 —— 存储层不该知道模型目录这件事。
    */
-  publicSettings(): Omit<PublicSettings, 'providers' | 'active' | 'activeReason' | 'warnings'> {
+  publicSettings(): Omit<PublicSettings, 'providers' | 'active' | 'activeReason' | 'warnings' | 'build'> {
     const settings = this.getSettings()
     return {
       provider: settings.provider,

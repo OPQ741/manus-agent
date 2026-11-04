@@ -33,6 +33,7 @@ import {
 import { canFailover, createSink, runGeneration, ModelEngine, type GenContext, type GenSink } from './agent/runner'
 import { assemble, entryPath } from '../shared/preview/assemble'
 import { injectTweak, sanitizeTweak } from '../shared/preview/tweak'
+import { readBuildMeta } from './build-info'
 import { createZip } from './export/zip'
 import { seedDatabase } from './store/seed'
 import { Store, resolveDataFile, type StoredSettings } from './store/store'
@@ -141,8 +142,13 @@ function activeOf(chain: ResolvedProvider[]): ProviderInfo | null {
 export function settingsView(store: Store, catalog: ResolvedCatalog): PublicSettings {
   const settings = store.getSettings()
   const chain = resolveChain(catalog, userFromSettings(settings))
+  const build = readBuildMeta()
   return {
     ...store.publicSettings(),
+    // 版本号跟着产物走：以前这里和 /api/health 各写一份 '1.0.0'，永远无法回答
+    // "线上跑的是哪一版" —— 现在两处都来自同一次构建写入的 build.json。
+    version: build.version,
+    build,
     providers: catalogView(catalog),
     active: activeOf(chain),
     activeReason: explainActive(catalog, settings, chain),
@@ -659,13 +665,16 @@ export async function createNucleusServer(options: ServerOptions = {}) {
         if (!READ_METHODS.has(method)) throw new HttpError(405, 'bad_request', '不支持的方法')
         const catalog = await getCatalog()
         const chain = resolveChain(catalog, storeSettingsUser(store))
+        const build = readBuildMeta()
         sendJson(res, 200, {
           ok: true,
           provider: activeOf(chain)?.id ?? null,
           providers: catalog.entries.filter((entry) => entry.ready).map((entry) => entry.profile.id),
           seeded,
           uptime: Math.round(process.uptime()),
-          version: '1.0.0',
+          version: build.version,
+          // 线上对账用：拿这个 commit 与仓库 HEAD 比，就能回答"线上是哪一版"
+          build,
         })
         return
       }

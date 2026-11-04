@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Store, deriveName, maskKey, resolveDataFile } from '../server/store/store'
-import type { FileEntry } from '../shared/types'
+import type { FileEntry, Plan } from '../shared/types'
 
 let dir: string
 let store: Store
@@ -52,6 +52,61 @@ describe('store · 项目', () => {
     expect(store.getProject(project.id)).toBeNull()
     expect(store.listMessages(project.id)).toHaveLength(0)
     expect(store.listVersions(project.id)).toHaveLength(0)
+  })
+})
+
+/**
+ * 项目名是用户资产：只有首轮允许方案给它命名，编辑轮（尤其是"改个颜色"）
+ * 不该顺手把名字换掉。这里的用例对应线上真实事故 ——
+ * 改完样式刷新，顶栏的应用名变成了"把主色换成墨绿"。
+ */
+describe('store · 名称与简介不被生成覆盖', () => {
+  const plan = (name: string, summary = '方案摘要'): Plan => ({ name, summary, stack: 'HTML', steps: [], files: [] })
+  const commitWithPlan = (id: string, files: FileEntry[], next: Plan) =>
+    store.commit(id, { files, plan: next, checks: [], prompt: 'p', usage: { ms: 1, provider: 'test', chars: 1 } })
+
+  it('UT-STORE-15 首轮提交采用方案里的应用名', async () => {
+    const project = await store.createProject({ prompt: '做一个记账应用' })
+    await commitWithPlan(project.id, [fileEntry('index.html', 'v1')], plan('随手记账'))
+    expect(store.getProject(project.id)?.name).toBe('随手记账')
+  })
+
+  it('UT-STORE-16 编辑轮不再用方案名覆盖项目名', async () => {
+    const project = await store.createProject({ prompt: '做一个记账应用' })
+    await commitWithPlan(project.id, [fileEntry('index.html', 'v1')], plan('随手记账'))
+    await commitWithPlan(project.id, [fileEntry('index.html', 'v2')], plan('把主色换成墨绿'))
+
+    const after = store.getProject(project.id)
+    expect(after?.name).toBe('随手记账')
+    // 方案里的名字回写成项目名：否则下一轮的编辑上下文里会出现两个应用名
+    expect(after?.plan?.name).toBe('随手记账')
+  })
+
+  it('UT-STORE-17 用户手动改名后，后续任何生成都不覆盖', async () => {
+    const project = await store.createProject({ prompt: '做一个记账应用' })
+    await commitWithPlan(project.id, [fileEntry('index.html', 'v1')], plan('随手记账'))
+    await store.updateProject(project.id, { name: '我的账本' })
+    expect(store.getProject(project.id)?.nameLocked).toBe(true)
+
+    await commitWithPlan(project.id, [fileEntry('index.html', 'v2')], plan('模型又起了一个名字'))
+    expect(store.getProject(project.id)?.name).toBe('我的账本')
+  })
+
+  it('UT-STORE-18 生成前就改名，首轮也不会被方案覆盖', async () => {
+    const project = await store.createProject({ prompt: '做一个记账应用' })
+    await store.updateProject(project.id, { name: '先起名再生成' })
+    await commitWithPlan(project.id, [fileEntry('index.html', 'v1')], plan('方案起的名字'))
+    expect(store.getProject(project.id)?.name).toBe('先起名再生成')
+  })
+
+  it('UT-STORE-19 手动改过的简介不被方案摘要覆盖', async () => {
+    const project = await store.createProject({ prompt: '做一个记账应用' })
+    await commitWithPlan(project.id, [fileEntry('index.html', 'v1')], plan('随手记账', '第一版摘要'))
+    await store.updateProject(project.id, { summary: '我自己写的一句话' })
+    expect(store.getProject(project.id)?.summaryLocked).toBe(true)
+
+    await commitWithPlan(project.id, [fileEntry('index.html', 'v2')], plan('随手记账', '模型重写的摘要'))
+    expect(store.getProject(project.id)?.summary).toBe('我自己写的一句话')
   })
 })
 

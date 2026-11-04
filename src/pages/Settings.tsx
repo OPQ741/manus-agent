@@ -32,6 +32,7 @@ import {
   Segmented,
   Space,
   Spin,
+  Tooltip,
   Typography,
 } from 'antd'
 import {
@@ -48,6 +49,7 @@ import type { ProviderOption, PublicSettings } from '../../shared/types'
 import { TopBar } from '../components/TopBar'
 import { Badge, toast } from '../components/ui'
 import { api } from '../lib/api'
+import { BUILD, describeBuild, formatBuild, sameBuild } from '../lib/build'
 import { useUiPrefs } from '../lib/ui-prefs'
 
 const { Text, Paragraph } = Typography
@@ -312,9 +314,17 @@ export function SettingsPage() {
         <Card
           title="模型"
           extra={
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              服务端 v{settings?.version ?? '1.0.0'}
-            </Text>
+            /*
+             * 构建指纹放这里而不是"关于"页：这是唯一一个用户会主动打开、
+             * 且需要报问题时顺手截图的地方。前端 BUILD 与服务端 build 不同版时
+             * 直接标出来 —— 静态资源有缓存，前后端混跑是真实会发生的。
+             */
+            <Tooltip title={describeBuild(settings?.build)}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                服务端 {settings ? formatBuild(settings.build) : '…'}
+                {settings && !sameBuild(BUILD, settings.build) ? ' · 前端不同版' : ''}
+              </Text>
+            </Tooltip>
           }
         >
           {settings ? (

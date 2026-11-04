@@ -834,6 +834,30 @@ describe('HTTP · 设计微调', () => {
     const body = (await response.json()) as { project: { tweak?: unknown } }
     expect(body.project.tweak).toBeUndefined()
   })
+
+  /**
+   * 线上事故：在对话里说"把主色换成墨绿"，顶栏的应用名跟着变成了那句话。
+   * 两个入口都得堵住 —— 编辑轮不预发占位方案，commit 也不再用方案改名。
+   */
+  it('IT-26 改样式的编辑轮不重命名项目，也不重发方案卡', async () => {
+    const project = await createProject('做一个记账应用，叫「固定名字账本」')
+    await generate(project.id, '做一个记账应用，叫「固定名字账本」')
+
+    const first = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail & { previewHtml: string }
+    expect(first.project.name).toBe('固定名字账本')
+
+    const response = await post(`/api/projects/${project.id}/generate`, { prompt: '把主色换成墨绿' })
+    expect(response.status).toBe(200)
+    const events = await readSse(response)
+    expect(events.some((event) => event.type === 'done')).toBe(true)
+    // 编辑轮沿用首轮方案：占位方案会把"把主色换成墨绿"当成应用名闪一下
+    expect(events.some((event) => event.type === 'plan')).toBe(false)
+
+    const after = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail & { previewHtml: string }
+    expect(after.project.name).toBe('固定名字账本')
+    // 样式确实生效 —— 否则"名字没变"可能只是因为这一轮什么都没做
+    expect(after.previewHtml).toContain('#12715B')
+  })
 })
 
 describe('HTTP · 接口面语义', () => {

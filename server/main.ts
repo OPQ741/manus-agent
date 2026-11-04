@@ -14,10 +14,13 @@ async function main() {
   server.listen(PORT, '0.0.0.0', () => {
     const view = settingsView(store, catalog)
     const ready = catalog.entries.filter((entry) => entry.ready)
+    const build = view.build
     console.log(
       `[nucleus] http://localhost:${PORT}  active=${view.active?.id ?? '(none)'}  ` +
         `free=${ready.some((entry) => entry.profile.free) ? 'on' : 'off'}  ` +
-        `providers=${ready.map((entry) => entry.profile.id).join(',') || '(none)'}`,
+        `providers=${ready.map((entry) => entry.profile.id).join(',') || '(none)'}  ` +
+        // 启动日志里就报出这是哪一次构建：排查"线上是哪一版"时不用再另开一个请求
+        `build=${build.commit}${build.dirty ? '+' : ''}${build.builtAt ? `@${build.builtAt}` : ''}`,
     )
   })
   const shutdown = () => {

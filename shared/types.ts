@@ -81,6 +81,24 @@ export interface Usage {
   tokens?: number
 }
 
+/**
+ * 构建指纹。
+ *
+ * 存在的唯一理由：回答"线上跑的这一版，对应仓库哪个提交"。
+ * 构建产物（dist/）不入库，所以只能把答案写进产物本身。
+ */
+export interface BuildMeta {
+  version: string
+  /** 短 hash，界面展示用 */
+  commit: string
+  commitFull: string
+  branch: string
+  /** 构建时工作区有未提交改动：说明这份产物不对应任何一个干净的提交 */
+  dirty: boolean
+  /** ISO 时间戳 */
+  builtAt: string
+}
+
 /** 全系统唯一的流式事件模型。SSE 传它，reducer 吃它，测试断言它。 */
 export type AgentEvent =
   | { type: 'stage'; stage: 'plan' | 'write' | 'verify'; status: 'running' | 'done' }
@@ -133,6 +151,16 @@ export interface Project {
    */
   providerModel?: string
   design: DesignPrefs
+  /**
+   * 项目名是否由用户手动设定过。
+   *
+   * 一旦为 true，后续生成不再用方案里的 name 覆盖它 —— 否则用户在设置里
+   * 改好的名字，会被下一句"把主色换成墨绿"这种编辑指令的占位方案冲掉。
+   * 老数据没有这个字段，按 false 处理（首轮仍可由方案定名）。
+   */
+  nameLocked?: boolean
+  /** 简介同上：手动改过就不再被方案摘要覆盖 */
+  summaryLocked?: boolean
   /** 设计微调（叠加在生成结果之上，不进入版本快照） */
   tweak?: DesignTweak
   files: FileEntry[]
@@ -197,6 +225,8 @@ export interface PublicSettings {
   /** 目录加载时的问题（配置写坏了、条目缺字段被跳过），空数组表示一切正常 */
   warnings: string[]
   version: string
+  /** 服务端产物的构建指纹：设置页据此显示"线上是哪一次构建" */
+  build: BuildMeta
 }
 
 /** 设置页里的一个可选提供方。ready=false 表示还没配 Key。 */

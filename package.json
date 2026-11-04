@@ -12,7 +12,7 @@
     "dev:api": "esbuild server/main.ts --bundle --platform=node --format=esm --outfile=dist/server.js --packages=external --watch",
     "build:client": "vite build",
     "build:server": "esbuild server/main.ts --bundle --platform=node --format=esm --outfile=dist/server.js --packages=external --log-level=warning",
-    "build": "npm run typecheck && npm run build:client && npm run build:server",
+    "build": "npm run typecheck && node scripts/build-meta.mjs && npm run build:client && npm run build:server",
     "prestart": "npm run build",
     "start": "node dist/server.js",
     "serve": "node dist/server.js",
@@ -22,6 +22,7 @@
     "make:factory": "esbuild scripts/make-factory.ts --bundle --platform=node --format=esm --outfile=.tmp-factory/run.mjs --log-level=warning && node .tmp-factory/run.mjs",
     "key": "esbuild scripts/set-key.ts --bundle --platform=node --format=esm --outfile=.tmp-key/run.mjs --log-level=warning && node .tmp-key/run.mjs",
     "deploy:prepare": "node scripts/deploy.mjs",
+    "verify:live": "node scripts/verify-deploy.mjs",
     "e2e": "node scripts/e2e.mjs",
     "demo": "node scripts/demo-capture.mjs",
     "demo:record": "node scripts/record-demo.mjs"

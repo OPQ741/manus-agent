@@ -72,7 +72,17 @@ const previewFrame = () => {
 
 /** 等一次生成结束：发送按钮从「停止」恢复成「发送」。 */
 async function waitForGenerationEnd(timeout = GEN_TIMEOUT) {
-  await page.getByRole('button', { name: /^发送$/ }).waitFor({ state: 'visible', timeout })
+  /*
+   * 判据是生成状态条（.run-status）：它只在 busy 时挂载，done/error 后整条卸载。
+   *
+   * 以前这里是等「发送」按钮可见 —— 但 composer 的发送按钮一直渲染，只是 disabled，
+   * 于是这个等待在点击后立刻返回，后面的断言全在流式写入的中途执行：
+   * 代码面板只显示正在写的那个文件的前几行，于是报"代码面板几乎是空的"。
+   * 先等它出现、再等它消失，两头都盖住（点击到首个事件之间也有空窗）。
+   */
+  const bar = page.locator('.run-status')
+  await bar.waitFor({ state: 'visible', timeout: 30_000 }).catch(() => {})
+  await bar.waitFor({ state: 'detached', timeout })
 }
 
 /** 读预览里的可见文本（生成物内部结构未知，文本是最稳的观测面）。 */

@@ -152,10 +152,20 @@ export async function* runGeneration(
 ): AsyncGenerator<AgentEvent> {
   const started = Date.now()
   const isRepair = Boolean(ctx.repair?.length)
+  /**
+   * 已有文件 = 增量编辑轮（"把主色换成墨绿""加一个导出按钮"）。
+   *
+   * 编辑轮同样不该重发方案：占位方案的名字是从这句指令里截出来的，
+   * 一句"把主色换成墨绿"会当场把应用名改成"把主色换成墨绿"，
+   * 并且通过 plan 事件闪现在对话流里当作"本轮方案"。
+   * 方案由首轮定稿，编辑轮沿用 ctx.plan（commit 时也不会再用它改名）。
+   */
+  const isEdit = !isRepair && ctx.files.length > 0
 
   yield { type: 'stage', stage: 'plan', status: 'running' }
-  if (isRepair) {
+  if (isRepair || isEdit) {
     // 修复轮不重发方案：否则占位方案会把已经定稿的应用名覆盖成"修复 app.js…"
+    sink.plan = ctx.plan
     yield { type: 'stage', stage: 'plan', status: 'done' }
   } else {
     let plan: Plan
@@ -174,6 +184,15 @@ export async function* runGeneration(
 
   const parser = new ProtocolParser()
   const files = sink.files
+  /**
+   * 编辑轮的方案不推给界面。
+   *
+   * 这一轮模型仍可能照协议输出 <plan>，但它的 name 往往是从指令里截的
+   * （"把主色换成墨绿"），summary 就是这句指令本身。推上去的结果是一张
+   * 写着新应用名的方案卡 —— 用户可以合理地理解为"我的项目被改名了"。
+   * 方案只在首轮定稿；编辑轮只关心它改了哪些文件。
+   */
+  const visible = (event: AgentEvent) => !(isEdit && event.type === 'plan')
   const applyEvent = (event: AgentEvent) => {
     if (event.type === 'file_end') {
       files.set(event.path, event.content)
@@ -205,12 +224,12 @@ export async function* runGeneration(
       const events = parser.push(chunk)
       for (const event of events) {
         applyEvent(event)
-        yield event
+        if (visible(event)) yield event
       }
     }
     for (const event of parser.end()) {
       applyEvent(event)
-      yield event
+      if (visible(event)) yield event
     }
   } catch (error) {
     yield toErrorEvent(error)
