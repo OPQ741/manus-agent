@@ -7,7 +7,6 @@
  *    走 RFC 5987 的 filename*，另给一个 ASCII 兜底名。
  */
 
-import { entryPath } from '../../shared/preview/assemble'
 import { injectTweak } from '../../shared/preview/tweak'
 import { HttpError } from '../http/errors'
 import { route, type Route } from '../http/router'
@@ -21,11 +20,14 @@ export function exportRoute(deps: { store: Store }): Route {
     if (project.files.length === 0) throw new HttpError(400, 'bad_request', '这个项目还没有生成任何文件')
 
     const hasReadme = project.files.some((file) => /^readme\.md$/i.test(file.path))
-    // 微调是"项目当前外观"的一部分：导出也必须带上，否则"下载下来跟预览长得不一样"
-    const tweakTarget = project.tweak ? entryPath(project.files) : null
+    /**
+     * 微调是"项目当前外观"的一部分：导出也必须带上，否则"下载下来跟预览长得不一样"。
+     *
+     * 多页面项目要给**每个** html 都注入：只改入口的话，翻到第二页主色就变回去了。
+     */
     const entries = project.files.map((file) => ({
       name: file.path,
-      content: file.path === tweakTarget ? injectTweak(file.content, project.tweak!) : file.content,
+      content: project.tweak && /\.html?$/i.test(file.path) ? injectTweak(file.content, project.tweak) : file.content,
     }))
     if (!hasReadme) {
       entries.push({

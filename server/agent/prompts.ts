@@ -47,10 +47,16 @@ export const SYSTEM_PROMPT = `你是 Nucleus 的应用生成引擎，一名擅�
 
 规则：
 1. 必须有 index.html；CSS/JS 用相对路径引用（<link rel="stylesheet" href="styles.css">、<script src="app.js"></script>），不要用构建工具、不要用裸模块 import。
-2. 文件数 ≤ 5，单个文件 ≤ 400 行。名字只用 a-z0-9_- 和 / 。
+2. 文件数 ≤ 8，单个文件 ≤ 400 行。名字只用 a-z0-9_- 和 / 。
 3. 不允许外部依赖；确有必要时只能用 CDN <script src="https://...">，并在页面里做降级。
 4. 用户只是在改东西时，只输出发生变化的文件，其余文件不要重复输出；要删文件用 <delete path="xxx"/>。
 5. 标签必须闭合。文件内容里如果出现 </file> 字样，请改成 <\\/file>。
+
+# 多页面（确实需要时才用）
+- 能一页做完就不要拆页。需要"关于/定价/详情"这类独立地址时，页面放在 pages/ 下：pages/about.html、pages/pricing.html；入口永远是根目录的 index.html。
+- 页面之间用相对路径互链：根页面写 <a href="pages/about.html">关于</a>，pages/ 里的页面写 <a href="../index.html">返回</a>。
+- 每个页面必须是**完整 HTML 文档**（含 <html> / <head> / <body>），不要只给一段 <section>。
+- 多页可以共用同一份 styles.css；脚本建议每页一个（about.js），也可以共用，平台的预览按页面隔离运行，不会互相干扰。
 
 # 设计令牌契约（决定"实时微调"能不能用，必须遵守）
 - 主色必须写成 CSS 变量 --accent，圆角必须写成 --radius，都定义在 :root 上：
@@ -60,6 +66,15 @@ export const SYSTEM_PROMPT = `你是 Nucleus 的应用生成引擎，一名擅�
   用户的"换个主色"就只会改到一半。
 - 同时派生 --accent-soft（主色的浅底，用于 focus 光环与选中态）与 --accent-ink（主色上的文字色，
   深底用 #FFFFFF、亮底用 #14140F）。
+
+# 图标与图片（决定"看起来像产品还是像作业"）
+- 需要图标时写 <svg data-icon="plus" width="18" height="18"></svg>，**不要自己画 path**，也不要引 Font Awesome / iconfont 等外部图标库：预览沙箱没有外网，那些链接会变成一排空方块。
+- 可用的图标名（写英文小写短横线形式，都是内置的）：plus minus x check check-circle search trash edit save copy download upload share filter menu more
+  arrow-left arrow-right arrow-up arrow-down chevron-left chevron-right chevron-down chevron-up home user users settings bell heart star bookmark
+  calendar clock chart trending pie tag mail phone map-pin credit-card lock eye eye-off refresh play pause sun moon info alert image file folder list grid cart package message send link globe
+- 图标默认继承文字颜色（stroke: currentColor）与字号（1em），所以在按钮里写一次就够，不要给它单独指定 color。
+- 需要 logo / 插图时输出 assets/xxx.svg 这种**纯文本 SVG 文件**，页面里用 <img src="assets/logo.svg" alt="..."> 引用；平台会在预览时把它内联成 data URI，导出时仍是独立文件。
+- 不要用 emoji 当图标（🔍 ⚙️ ✅ 这类），它们在不同系统上字形差异极大，也是"看起来业余"的第一来源。
 
 # 工程质量底线
 - 真实交互：按钮点了要有反应，表单要能提交，状态要真的变化；数据用 localStorage 持久化（键名前缀 nucleus:）。
@@ -131,16 +146,25 @@ export function editTurnMessages(
   design: DesignPrefs,
   files: FileEntry[],
   plan: Plan | null,
+  /**
+   * 项目上下文（<summary> + <history>）。
+   *
+   * 顺序放在文件清单之前：先知道"我们一路改到了哪"，再看代码，模型才知道
+   * 这次该从哪个角度读文件。放在最后会被 24 KB 的代码埋掉，等于没给。
+   */
+  context = '',
 ): ChatMessage[] {
-  const context = renderFiles(files, prompt)
+  // 上下文也是预算的一部分：它多占一个字，文件就少给一个字
+  const budget = Math.max(MAX_CONTEXT_CHARS - context.length, 8_000)
+  const contextFiles = renderFiles(files, prompt, budget)
   return [
     { role: 'system', content: SYSTEM_PROMPT },
     {
       role: 'user',
       content: `${designBrief(design)}
-
+${context ? `\n${context}\n` : ''}
 当前项目${plan ? `（${plan.name}：${plan.summary}）` : ''}的完整文件如下：
-${context}
+${contextFiles}
 
 用户的新要求：${sanitizeUserPrompt(prompt)}
 

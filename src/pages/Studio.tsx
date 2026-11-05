@@ -11,10 +11,11 @@ import {
   SendOutlined,
   ShareAltOutlined,
 } from '@ant-design/icons'
-import type { AgentEvent, DesignTweak, FileEntry, Project, ProjectDetail, PublicSettings } from '../../shared/types'
+import type { AgentEvent, DesignTweak, FileEntry, Project, ProjectDetail, PublicSettings, StopMode } from '../../shared/types'
 import { assemble } from '../../shared/preview/assemble'
 import { ChatStream, EMPTY_LIVE, type LiveState } from '../components/ChatStream'
 import { CodePanel } from '../components/CodePanel'
+import { ErrorBoundary } from '../components/ErrorBoundary'
 import { ModelMenu } from '../components/ModelMenu'
 import { PreviewPanel } from '../components/PreviewPanel'
 import { ProjectSettingsModal } from '../components/ProjectSettingsModal'
@@ -25,6 +26,8 @@ import { Badge, toast } from '../components/ui'
 import { ApiError, api, generate } from '../lib/api'
 import { explainError } from '../lib/errors'
 import { readModelChoice, writeModelChoice, type ModelChoice } from '../lib/model-prefs'
+import { useOnline } from '../lib/online'
+import { failedPromptOf } from '../lib/retry'
 import { applyStorageMessage } from '../lib/seed'
 import { shareUrlFor } from '../lib/share'
 import { takePendingPrompt } from '../lib/pending'
@@ -156,7 +159,15 @@ export function StudioPage({ id }: { id: string }) {
   const lastFailedPromptRef = useRef<string | null>(null)
   /** 当前项目已有多少文件 —— 用来判断「首次生成」还是「迭代」，避免抢用户的页签 */
   const fileCountRef = useRef(0)
+  /**
+   * 本轮开始时项目在第几版。
+   *
+   * 断流之后靠版本号判断"服务端到底有没有落库"：版本前进了就以历史记录为准，
+   * 没前进就说明这一轮什么都没提交，屏幕上那些半成品得留着给人看。
+   */
+  const versionRef = useRef(0)
   const runningFileRef = live.files.find((file) => !file.done)?.path ?? null
+  const online = useOnline()
 
   /**
    * 边生成边预览。
@@ -195,6 +206,7 @@ export function StudioPage({ id }: { id: string }) {
 
   useEffect(() => {
     fileCountRef.current = detail?.project.files.length ?? 0
+    versionRef.current = detail?.project.version ?? 0
   }, [detail])
 
   const refresh = useCallback(async () => {
@@ -210,6 +222,7 @@ export function StudioPage({ id }: { id: string }) {
       const text = prompt.trim()
       if (!text) return
       const hadNoFiles = fileCountRef.current === 0
+      const startVersion = versionRef.current
       busyRef.current = true
       setBusy(true)
       setPendingUser(text)
@@ -226,6 +239,7 @@ export function StudioPage({ id }: { id: string }) {
       let frame = 0
       let partial = false
       let kept = 0
+      let discarded = false
       let streamError: { code: string; message: string } | null = null
       const flush = () => {
         frame = 0
@@ -234,9 +248,12 @@ export function StudioPage({ id }: { id: string }) {
         setLive((prev) => applyEvents(prev, events))
       }
       const enqueue = (event: AgentEvent) => {
-        if (event.type === 'done' && event.partial) {
-          partial = true
-          kept = event.kept ?? 0
+        if (event.type === 'done') {
+          if (event.partial) {
+            partial = true
+            kept = event.kept ?? 0
+          }
+          if (event.discarded) discarded = true
         }
         // 流里的 error 事件不会让 fetch 抛错，必须自己接住，
         // 否则模型 401 / 超时这类失败在界面上是"静默失败"
@@ -262,31 +279,60 @@ export function StudioPage({ id }: { id: string }) {
         const data = await refresh()
         if (streamError) {
           setError(streamError)
-        } else {
+        } else if (discarded) {
+          lastFailedPromptRef.current = null
+          toast('已放弃本轮：项目保持上一版，没有改动任何文件')
+        } else if (partial) {
+          lastFailedPromptRef.current = null
+          toast(
+            kept > 0
+              ? `已停止，保留了 ${kept} 个已完成的文件（v${data.project.version}）`
+              : '已停止：这次还没写完任何文件，没有产生新版本',
+          )
+        } else if (data.project.version > startVersion) {
           lastFailedPromptRef.current = null
           // 只有"从零生成第一次"才自动切到预览；迭代时尊重用户当前在看的那一页
           if (hadNoFiles && data.project.files.length > 0) setTab('preview')
-          if (partial) {
-            toast(
-              kept > 0
-                ? `已停止，保留了 ${kept} 个已完成的文件（v${data.project.version}）`
-                : '已停止：这次还没写完任何文件，没有产生新版本',
-            )
-          } else {
-            toast(`已更新到 v${data.project.version}`)
-          }
+          toast(`已更新到 v${data.project.version}`)
+        } else {
+          /**
+           * 既没有 done(partial)、版本也没前进 —— 流是被掐断的（网关超时、
+           * 进程重启、手机切网）。此时不能报"已更新"，那是在编一个没发生的结果。
+           */
+          setError({ code: 'llm_network', message: '连接中途断开了，这一轮没有产生新版本' })
         }
+        setLive(EMPTY_LIVE)
       } catch (err) {
         if (controller.signal.aborted) {
           toast('已停止生成，未完成的改动不会写入')
+          setLive(EMPTY_LIVE)
         } else {
           const apiError = err as ApiError
-          setError({ code: apiError.code ?? 'internal', message: apiError.message ?? '生成失败' })
-        }
-        try {
-          await refresh()
-        } catch {
-          /* 忽略二次失败 */
+          const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+          setError({
+            code: apiError.code ?? (offline ? 'llm_network' : 'internal'),
+            message: apiError.message ?? (offline ? '网络已断开，这一轮没有收到收尾确认' : '生成中断'),
+          })
+          /**
+           * 断流时的两种结局：
+           *  - 回读成功且版本前进了 → 服务端其实已经落库，以历史记录为准，清掉流；
+           *  - 回读不上（多半是离线）→ **保留屏幕上已经长出来的内容**，
+           *    只把 running 摘掉。以前这里无条件清空，断网一瞬间刚才看到的进度全没了。
+           */
+          let committed = false
+          try {
+            const data = await refresh()
+            committed = data.project.version > startVersion
+          } catch {
+            /* 回读也失败：保持现状 */
+          }
+          if (committed) {
+            setLive(EMPTY_LIVE)
+          } else {
+            setLive((prev) =>
+              prev.files.some((file) => file.done) ? { ...prev, running: false, interrupted: true } : EMPTY_LIVE,
+            )
+          }
         }
       } finally {
         if (frame) cancelAnimationFrame(frame)
@@ -294,7 +340,6 @@ export function StudioPage({ id }: { id: string }) {
         abortRef.current = null
         setBusy(false)
         setPendingUser(null)
-        setLive(EMPTY_LIVE)
       }
     },
     [id, refresh],
@@ -368,17 +413,30 @@ export function StudioPage({ id }: { id: string }) {
   }
 
   /**
-   * 停止生成。
+   * 停止生成（两种语义）。
    *
    * 刻意**不**直接 abort 掉 SSE 连接：连接一断就收不到服务端的确认。
-   * 这里只发一个 /stop，请求服务端中断引擎；服务端随后把"已写完的文件"
-   * 提交成一个新版本，再通过同一条流回一个 done(partial) 事件。
+   * 这里只发一个 /stop，请求服务端中断引擎；服务端随后按 mode 收尾 ——
+   * keep 把"已写完的文件"提交成新版本，discard 什么都不留 —— 再通过同一条流
+   * 回一个 done(partial|discarded) 事件。
+   *
+   * 409（当前没有进行中的生成）不再被吞掉：用户点了停止却毫无反应，
+   * 比给一句"已经结束了"更让人怀疑界面坏了。
    */
-  const stop = useCallback(() => {
-    void api.stop(id).catch(() => {
-      /* 生成可能已经结束，忽略 */
-    })
-  }, [id])
+  const stop = useCallback(
+    (mode: StopMode) => {
+      void api
+        .stop(id, mode)
+        .then(() => {
+          if (mode === 'discard') toast('正在放弃本轮…')
+        })
+        .catch((err: unknown) => {
+          const code = (err as ApiError)?.code
+          toast(code === 'busy' ? '这一轮已经结束了，不需要再停' : '停止没发出去，请稍后再试')
+        })
+    },
+    [id],
+  )
 
   const rollback = async (seq: number) => {
     setRolling(true)
@@ -463,9 +521,14 @@ export function StudioPage({ id }: { id: string }) {
   // 走 shareUrlFor 而不是裸拼 origin：托管网关的访问口令（?sharecode=）必须一起带上，
   // 否则复制出去的链接在别人（以及刷新后的自己）那里是一页"链接不完整"。
   const shareUrl = shareUrlFor(project.slug, window.location.origin)
-  const canSend = !busy && input.trim().length > 0
+  const canSend = online && !busy && input.trim().length > 0
   const errorInfo = explainError(error?.code, error?.message ?? '')
-  const retryPrompt = input.trim() || lastFailedPromptRef.current || ''
+  /**
+   * 重试优先用「失败的那条指令」：服务端落库的 meta.prompt 优先于内存 ref
+   * （刷新后 ref 是空的），最后才退回输入框 —— 顺序反过来就变成了"发送"。
+   */
+  const retryPrompt = lastFailedPromptRef.current || failedPromptOf(messages) || input.trim()
+  const retryingLast = Boolean(retryPrompt) && retryPrompt !== input.trim()
   const fileTotal = project.files.length + live.files.filter((file) => !project.files.some((item) => item.path === file.path)).length
 
   const send = () => {
@@ -534,19 +597,31 @@ export function StudioPage({ id }: { id: string }) {
               className="error-banner"
               type="error"
               showIcon
-              style={{ margin: '0 12px 8px' }}
               message={errorInfo.title}
-              description={errorInfo.hint}
+              description={
+                <div>
+                  <div>{errorInfo.hint}</div>
+                  {errorInfo.action.kind === 'retry' && retryingLast ? (
+                    <div className="error-retry-hint">
+                      将重试上一条指令：{retryPrompt.length > 60 ? `${retryPrompt.slice(0, 60)}…` : retryPrompt}
+                    </div>
+                  ) : null}
+                </div>
+              }
               action={
-                errorInfo.action.kind === 'none' ? null : (
+                /*
+                  没有可重试的指令时**不渲染**按钮，而不是渲染一个永远禁用的按钮：
+                  一个灰按钮摆在那里，用户只会反复点它，然后怀疑是网络问题。
+                */
+                errorInfo.action.kind === 'none' || (errorInfo.action.kind === 'retry' && !retryPrompt) ? null : (
                   <Button
                     size="small"
-                    disabled={errorInfo.action.kind === 'retry' && !retryPrompt}
                     onClick={() => {
                       if (errorInfo.action.kind === 'settings') window.location.hash = '#/settings'
                       else if (errorInfo.action.kind === 'home') window.location.hash = '#/'
                       else {
                         setError(null)
+                        // 清掉草稿：重试成功后输入框里还留着旧文案，下次回车就会重复发一遍
                         setInput('')
                         void run(retryPrompt)
                       }
@@ -580,7 +655,7 @@ export function StudioPage({ id }: { id: string }) {
                     event.preventDefault()
                     send()
                   }
-                  if (event.key === 'Escape' && busy) stop()
+                  if (event.key === 'Escape' && busy) stop('keep')
                 }}
                 placeholder={
                   project.files.length === 0
@@ -592,69 +667,79 @@ export function StudioPage({ id }: { id: string }) {
               />
               <Flex className="chat-input-bar" align="center" gap={8}>
                 <div className="spacer" />
-                <Button
-                  type="primary"
-                  size="small"
-                  icon={<SendOutlined />}
-                  aria-label="发送"
-                  disabled={!canSend}
-                  onClick={send}
-                >
-                  发送
-                </Button>
+                {!online ? <span className="composer-offline">网络已断开</span> : null}
+                <Tooltip title={online ? '' : '网络已断开，恢复后可以继续'}>
+                  <Button
+                    type="primary"
+                    size="small"
+                    icon={<SendOutlined />}
+                    aria-label="发送"
+                    disabled={!canSend}
+                    onClick={send}
+                  >
+                    发送
+                  </Button>
+                </Tooltip>
               </Flex>
             </div>
           </div>
         </section>
 
         <section className="workspace" aria-label="工作区">
-          <Tabs
-            className="ws-tabs"
-            activeKey={tab}
-            onChange={(key) => setTab(key as Tab)}
-            items={[
-              {
-                key: 'preview',
-                label: (
-                  <Space size={6}>
-                    <EyeOutlined /> 预览
-                  </Space>
-                ),
-                children: (
-                  <PreviewPanel
-                    projectId={id}
-                    html={previewHtml}
-                    liveHtml={livePreviewHtml}
-                    checks={project.checks}
-                    errors={runtimeErrors}
-                    tweak={project.tweak}
-                    live={live}
-                    onTweakSave={saveTweak}
-                    onHeal={heal}
-                    onRefresh={() => void refresh()}
-                  />
-                ),
-              },
-              {
-                key: 'code',
-                label: (
-                  <Space size={6}>
-                    <CodeOutlined /> 代码 <Badge>{fileTotal}</Badge>
-                  </Space>
-                ),
-                children: <CodePanel files={project.files} liveFiles={live.files} followPath={live.running ? runningFileRef : null} />,
-              },
-              {
-                key: 'versions',
-                label: (
-                  <Space size={6}>
-                    <HistoryOutlined /> 版本 <Badge>{versions.length}</Badge>
-                  </Space>
-                ),
-                children: <VersionPanel versions={versions} current={project.version} onRollback={(seq) => void rollback(seq)} busy={rolling} />,
-              },
-            ]}
-          />
+          {/* 右半屏崩了不该把左侧对话一起带走：面板级兜底，重挂即可恢复 */}
+          <ErrorBoundary scope="panel" label="预览与代码">
+            <Tabs
+              className="ws-tabs"
+              activeKey={tab}
+              onChange={(key) => setTab(key as Tab)}
+              items={[
+                {
+                  key: 'preview',
+                  label: (
+                    <Space size={6}>
+                      <EyeOutlined /> 预览
+                    </Space>
+                  ),
+                  children: (
+                    <PreviewPanel
+                      projectId={id}
+                      html={previewHtml}
+                      liveHtml={livePreviewHtml}
+                      checks={project.checks}
+                      errors={runtimeErrors}
+                      tweak={project.tweak}
+                      live={live}
+                      onTweakSave={saveTweak}
+                      onHeal={heal}
+                      onRefresh={() => void refresh()}
+                    />
+                  ),
+                },
+                {
+                  key: 'code',
+                  label: (
+                    <Space size={6}>
+                      <CodeOutlined /> 代码 <Badge>{fileTotal}</Badge>
+                    </Space>
+                  ),
+                  children: (
+                    <CodePanel files={project.files} liveFiles={live.files} followPath={live.running ? runningFileRef : null} />
+                  ),
+                },
+                {
+                  key: 'versions',
+                  label: (
+                    <Space size={6}>
+                      <HistoryOutlined /> 版本 <Badge>{versions.length}</Badge>
+                    </Space>
+                  ),
+                  children: (
+                    <VersionPanel versions={versions} current={project.version} onRollback={(seq) => void rollback(seq)} busy={rolling} />
+                  ),
+                },
+              ]}
+            />
+          </ErrorBoundary>
         </section>
       </div>
 

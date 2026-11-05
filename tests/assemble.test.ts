@@ -185,3 +185,85 @@ describe('assemble · 种子注入', () => {
     expect(seeded).toContain('<\\/script>')
   })
 })
+
+describe('assemble · 多页面', () => {
+  const HOME = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>书签</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+  <h1>书签</h1>
+  <a href="pages/about.html">关于</a>
+  <script src="app.js"></script>
+</body>
+</html>`
+
+  const ABOUT = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>关于</title><link rel="stylesheet" href="../styles.css"></head>
+<body>
+  <h1>关于我们</h1>
+  <a href="../index.html">返回</a>
+  <script src="../app.js"></script>
+</body>
+</html>`
+
+  const MULTI: FileEntry[] = [
+    file('index.html', HOME),
+    file('pages/about.html', ABOUT),
+    file('styles.css', 'h1 { color: var(--accent) }'),
+    file('app.js', 'console.log(1)'),
+  ]
+
+  /** 从壳里把内嵌的 DOCS 抠出来解析：这条断言能一次抓住转义/引号类错误 */
+  function readDocs(html: string): Record<string, string> {
+    const start = html.indexOf('var DOCS = ')
+    const end = html.indexOf('var TITLES = ')
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const raw = html.slice(start + 'var DOCS = '.length, end).trim().replace(/;$/, '')
+    return JSON.parse(raw) as Record<string, string>
+  }
+
+  it('UT-ASM-20 两个页面 → 路由壳，两个路由都在', () => {
+    const result = assemble(MULTI)
+    expect(result.entry).toBe('index.html')
+    expect(result.checks.find((check) => check.id === 'pages')?.detail).toContain('/about')
+    expect(result.html).toContain('data-nucleus="pages"')
+    expect(result.html).toContain('np-frame')
+    expect(Object.keys(readDocs(result.html))).toEqual(['/', '/about'])
+  })
+
+  it('UT-ASM-21 每页各自内联一份共享样式（帧之间不共享 DOM）', () => {
+    const result = assemble(MULTI)
+    const docs = readDocs(result.html)
+    expect(docs['/']).toContain('<style data-src="styles.css">')
+    expect(docs['/about']).toContain('<style data-src="styles.css">')
+    expect(result.missing).toHaveLength(0)
+  })
+
+  it('UT-ASM-22 壳脚本本身语法正确（模板里的转义写错就会让整站白屏）', () => {
+    const result = assemble(MULTI)
+    const start = result.html.indexOf('<script data-nucleus="pages">') + '<script data-nucleus="pages">'.length
+    const end = result.html.indexOf('</script>', start)
+    const code = result.html.slice(start, end)
+    expect(() => new Function(code)).not.toThrow()
+  })
+
+  it('UT-ASM-23 链接指向不存在的页面 → 进 missing，驱动修复轮', () => {
+    const broken = HOME.replace('pages/about.html', 'pages/pricing.html')
+    const result = assemble([file('index.html', broken), file('pages/about.html', ABOUT)])
+    expect(result.missing).toContain('pages/pricing.html')
+    expect(result.checks.find((check) => check.id === 'refs')?.ok).toBe(false)
+  })
+
+  it('UT-ASM-24 只有 index.html 时仍走单页路径（不产出路由壳）', () => {
+    const result = assemble([file('index.html', HOME), file('styles.css', 'a{}'), file('app.js', 'x')])
+    expect(result.html).not.toContain('data-nucleus="pages"')
+    expect(result.checks.some((check) => check.id === 'pages')).toBe(false)
+  })
+
+  it('UT-ASM-25 多页面项目里一个语法错脚本仍然是阻断级', () => {
+    const result = assemble([...MULTI.filter((item) => item.path !== 'app.js'), file('app.js', 'function (')])
+    expect(result.broken).toContain('app.js')
+  })
+})

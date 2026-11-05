@@ -33,6 +33,13 @@ export interface GenContext {
   plan: Plan | null
   signal?: AbortSignal
   /**
+   * 项目上下文：<summary> + <history>，由编排层在开跑前从库里拼好。
+   *
+   * 放在 ctx 里而不是让引擎自己去查库：引擎是"什么都拿得到也什么都查不到"的
+   * 纯执行层，它不该知道 store 存在；同时测试可以直接构造这段文本。
+   */
+  history?: string
+  /**
    * 修复轮：非空时本轮**只**重新输出这些文件（其余保持不动），
    * reason 会原样告诉模型上一次是哪里不对（没输出 / 被截断 / 语法不通）。
    * 由编排层在 assemble 之后设置。
@@ -132,7 +139,7 @@ export class ModelEngine implements AgentEngine {
 
     const messages =
       ctx.files.length > 0
-        ? editTurnMessages(ctx.prompt, ctx.design, ctx.files, ctx.plan)
+        ? editTurnMessages(ctx.prompt, ctx.design, ctx.files, ctx.plan, ctx.history ?? '')
         : firstTurnMessages(ctx.prompt, ctx.design)
 
     for await (const delta of streamChat(this.config, messages, { signal: ctx.signal, onUsage: this.onUsage })) {

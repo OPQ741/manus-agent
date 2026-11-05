@@ -4,6 +4,7 @@ import { DownloadOutlined, ExportOutlined } from '@ant-design/icons'
 import type { ShareDetail } from '../../shared/types'
 import { Logo } from '../components/ui'
 import { api, visitorId } from '../lib/api'
+import { openExternal } from '../lib/preview-host'
 import { applyStorageMessage, injectSeed, readSeed } from '../lib/seed'
 
 const { Text } = Typography
@@ -50,10 +51,16 @@ export function SharePage({ slug }: { slug: string }) {
     const projectId = data?.project.id
     if (!projectId) return
     const onMessage = (event: MessageEvent) => {
-      const payload = event.data as { __nucleus?: number; kind?: string } | null
-      if (!payload || payload.__nucleus !== 1 || payload.kind !== 'storage') return
+      const payload = event.data as { __nucleus?: number; kind?: string; url?: unknown } | null
+      if (!payload || payload.__nucleus !== 1) return
       // 分享页是公开页面，任何窗口都能 postMessage 过来：只认自己那个 iframe
       if (event.source !== frameRef.current?.contentWindow) return
+      // 沙箱没有 allow-popups，弹窗只能由宿主开（同 Studio 的处理）
+      if (payload.kind === 'open') {
+        openExternal(payload.url)
+        return
+      }
+      if (payload.kind !== 'storage') return
       applyStorageMessage(projectId, payload as { op: 'set' | 'remove' | 'clear'; key?: string; value?: string })
     }
     window.addEventListener('message', onMessage)
@@ -118,7 +125,7 @@ export function SharePage({ slug }: { slug: string }) {
           <iframe
             ref={frameRef}
             title={data.project.name}
-            sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+            sandbox="allow-scripts allow-forms allow-modals allow-downloads"
             srcDoc={srcDoc}
           />
         ) : null}

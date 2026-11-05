@@ -13,6 +13,7 @@ import {
 } from '@ant-design/icons'
 import type { Check, DesignTweak } from '../../shared/types'
 import { tweakVars } from '../../shared/theme'
+import { isBridgeMessage, openExternal, watchFrame } from '../lib/preview-host'
 import { injectSeed, readSeed } from '../lib/seed'
 import { effectiveStage, STAGE_LABEL } from '../lib/run-stage'
 import { TweakPanel } from './TweakPanel'
@@ -135,6 +136,8 @@ export function PreviewPanel({
   const [showTweak, setShowTweak] = useState(false)
   const [draft, setDraft] = useState<DesignTweak>(tweak ?? {})
   const [saving, setSaving] = useState(false)
+  /** 预览失去响应（多半是死循环）：只遮住预览，不动编辑器 */
+  const [stalled, setStalled] = useState(false)
 
   const frameRef = useRef<HTMLIFrameElement>(null)
   const saveTimer = useRef<number | null>(null)
@@ -155,6 +158,31 @@ export function PreviewPanel({
   // 生成中的本地版本优先：它是用"本轮已写完的文件 + 上一版其余文件"现组的，
   // 比服务端那份还没落库的旧版本新。整轮结束后 liveHtml 归零，自动回到最终真相。
   const srcDoc = useMemo(() => injectSeed(liveHtml || html, readSeed(projectId)), [html, liveHtml, projectId, nonce])
+
+  /**
+   * 看门狗：每秒 ping 一次沙箱，3 秒没回应就认定卡住。
+   *
+   * 真正卡死的是预览的渲染线程，宿主本身没问题 —— 所以能做的不是"杀掉它"，
+   * 而是把"为什么白屏"说清楚，并给一个重新加载的出口。重挂 iframe 会连同
+   * 那个死循环一起丢掉（文档被丢弃，脚本自然不再执行）。
+   */
+  useEffect(() => {
+    const frame = frameRef.current
+    if (!frame || !srcDoc) return
+    setStalled(false)
+    return watchFrame(frame, setStalled)
+  }, [srcDoc, nonce])
+
+  /** 沙箱没有 allow-popups：生成物里的弹窗统一由宿主开，伪协议一律拒绝。 */
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (!isBridgeMessage(event.data) || event.data.kind !== 'open') return
+      openExternal(event.data.url)
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
 
   const blocking = checks.find((check) => check.level === 'block' && !check.ok)
   const passed = checks.filter((check) => check.ok).length
@@ -361,11 +389,45 @@ export function PreviewPanel({
                 key={nonce}
                 ref={frameRef}
                 title="应用预览"
-                sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+                /*
+                 * 没有 allow-same-origin：文档拿到的是不透明源，碰不到宿主的 storage/cookie。
+                 * 也没有 allow-popups：所有弹窗都要经桥接上报、由宿主开（见 preview-host.ts），
+                 * 否则生成物可以拿它做钓鱼窗口。allow-downloads 保留 —— 导出按钮是常见需求。
+                 */
+                sandbox="allow-scripts allow-forms allow-modals allow-downloads"
                 srcDoc={srcDoc}
                 // 重载后用当前草稿补一次：否则保存期间的刷新会闪回旧配色
                 onLoad={() => applyLive(draftRef.current)}
               />
+              {stalled ? (
+                /*
+                 * 看门狗遮罩。说清三件事：卡在哪、为什么、现在点哪里 ——
+                 * 死循环时用户看到的是纯白 + 没有报错，比任何红字都更像"这东西坏了"。
+                 */
+                <div className="frame-stalled" role="alert">
+                  <div className="fs-card">
+                    <Text strong style={{ fontSize: 14 }}>
+                      预览没有响应
+                    </Text>
+                    <Text type="secondary" style={{ fontSize: 12.5 }}>
+                      生成的应用里可能有个死循环，把预览的渲染线程占住了。这里只能重新加载把它丢掉，
+                      编辑器和已保存的版本不受影响。
+                    </Text>
+                    <Space size={8}>
+                      <Button
+                        size="small"
+                        type="primary"
+                        onClick={() => {
+                          setStalled(false)
+                          setNonce((value) => value + 1)
+                        }}
+                      >
+                        重新加载预览
+                      </Button>
+                    </Space>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </>
         ) : running && live ? (

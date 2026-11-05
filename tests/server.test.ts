@@ -693,6 +693,116 @@ describe('HTTP · 我的项目与中断保留', () => {
     const stopped = await post(`/api/projects/${project.id}/stop`, {})
     expect(stopped.status).toBe(409)
   })
+
+  it('IT-18b 放弃本轮：已写完的文件也不落库，版本保持不变', async () => {
+    fake.setMode('slow')
+    try {
+      const prompt = '做一个番茄钟，可以开始和暂停'
+      const project = await createProject(prompt)
+
+      const response = await fetch(base + `/api/projects/${project.id}/generate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      })
+      expect(response.status).toBe(200)
+
+      const events: AgentEvent[] = []
+      const reader = response.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      const reading = (async () => {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          let index: number
+          while ((index = buffer.indexOf('\n\n')) >= 0) {
+            const block = buffer.slice(0, index)
+            buffer = buffer.slice(index + 2)
+            for (const line of block.split('\n')) {
+              const trimmed = line.trim()
+              if (!trimmed.startsWith('data:')) continue
+              try {
+                events.push(JSON.parse(trimmed.slice(5).trim()) as AgentEvent)
+              } catch {
+                /* 忽略坏帧 */
+              }
+            }
+          }
+        }
+      })()
+
+      // 先等到真有文件写完：否则"丢弃成功"可能只是因为它本来就没写出东西
+      const deadline = Date.now() + 20_000
+      while (!events.some((event) => event.type === 'file_end') && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 15))
+      }
+      expect(events.some((event) => event.type === 'file_end')).toBe(true)
+
+      const stopped = await post(`/api/projects/${project.id}/stop`, { mode: 'discard' })
+      expect(stopped.status).toBe(200)
+      expect(((await stopped.json()) as { mode: string }).mode).toBe('discard')
+
+      await reading
+
+      const done = events.find((event) => event.type === 'done')
+      expect(done).toBeTruthy()
+      if (done?.type === 'done') {
+        expect(done.discarded).toBe(true)
+        expect(done.partial).toBe(true)
+        expect(done.kept).toBe(0)
+      }
+
+      const detail = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail
+      // 版本没动、文件没多、版本历史里也不该出现一个"空版本"
+      expect(detail.project.version).toBe(0)
+      expect(detail.project.files).toHaveLength(0)
+      expect(detail.versions).toHaveLength(0)
+      expect(detail.messages.some((message) => message.content.includes('已放弃'))).toBe(true)
+    } finally {
+      fake.setMode('ok')
+    }
+  })
+
+  it('IT-18d 第二轮生成带上项目上下文（summary + history）', async () => {
+    const project = await createProject('做一个书签管理器，可以按标签筛选')
+    const first = await post(`/api/projects/${project.id}/generate`, { prompt: '做一个书签管理器，可以按标签筛选' })
+    await readSse(first)
+
+    const second = await post(`/api/projects/${project.id}/generate`, { prompt: '把主色换成墨绿' })
+    await readSse(second)
+
+    const body = fake.lastBody()
+    const content = (body?.messages ?? []).map((message) => message.content).join('\n')
+    // 没有这段，模型在第 12 轮就不知道"刚才那个"指什么
+    expect(content).toContain('<history>')
+    expect(content).toContain('做一个书签管理器')
+    expect(content).toContain('<summary>')
+    expect(content).toContain('v1')
+    // 当前这句只该出现一次（作为"用户的新要求"），不该在 history 里重复
+    expect(content.split('把主色换成墨绿').length - 1).toBe(1)
+  })
+
+  it('IT-18c 失败的那条指令要落库：刷新后「重新生成」仍能带原指令', async () => {
+    fake.setMode('auth')
+    try {
+      const prompt = '做一个喝水提醒，每两小时一次'
+      const project = await createProject(prompt)
+      const response = await post(`/api/projects/${project.id}/generate`, { prompt })
+      expect(response.status).toBe(200)
+      const events = await readSse(response)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+
+      const detail = (await (await fetch(`${base}/api/projects/${project.id}`)).json()) as ProjectDetail
+      const error = detail.messages.find((message) => message.kind === 'error')
+      expect(error).toBeTruthy()
+      // 只落错误码是不够的：前端要靠 meta.prompt 才知道"重新生成"该重发哪句
+      expect(error?.meta?.prompt).toBe(prompt)
+    } finally {
+      fake.setMode('ok')
+    }
+  })
 })
 
 describe('HTTP · 设计微调', () => {

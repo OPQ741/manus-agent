@@ -6,7 +6,7 @@
  */
 
 import type { IncomingMessage } from 'node:http'
-import type { DesignPrefs, DesignTweak } from '../../shared/types'
+import type { DesignPrefs, DesignTweak, StopMode } from '../../shared/types'
 import { PROMPT_MAX_LENGTH } from '../../shared/types'
 import { sanitizeTweak } from '../../shared/preview/tweak'
 import { resolveChain, type ResolvedCatalog } from '../agent/providers'
@@ -100,10 +100,20 @@ export function projectRoutes(deps: Deps): Route[] {
       sendJson(res, 200, { project: result.project, version: result.version })
     }),
 
-    // 停止当前生成：连接不关，服务端中断后把已完成的文件提交为新版本
-    route('/api/projects/:id/stop', ['POST'], async ({ res, params }) => {
-      if (!abortGeneration(params['id']!)) throw new HttpError(409, 'busy', '当前没有进行中的生成')
-      sendJson(res, 200, { ok: true })
+    /**
+     * 停止当前生成：连接不关，服务端中断后按 mode 决定结局。
+     *
+     * - 不带 body（老客户端）：keep，把已写完的文件提交成新版本；
+     * - `{ mode: 'discard' }`：连已写完的也不要，项目停在原版本。
+     *
+     * body 解析失败一律回落 keep：这条路是「核按钮」，宁可多留一个版本，
+     * 也不能因为客户端发了个空 body 就把用户这一轮悄悄扔了。
+     */
+    route('/api/projects/:id/stop', ['POST'], async ({ req, res, params }) => {
+      const body = await readJson<{ mode?: string }>(req).catch(() => ({ mode: undefined }))
+      const mode: StopMode = body.mode === 'discard' ? 'discard' : 'keep'
+      if (!abortGeneration(params['id']!, mode)) throw new HttpError(409, 'busy', '当前没有进行中的生成')
+      sendJson(res, 200, { ok: true, mode })
     }),
 
     /**

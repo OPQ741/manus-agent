@@ -9,6 +9,7 @@ import type {
   ProviderId,
   PublicSettings,
   ShareDetail,
+  StopMode,
   Version,
 } from '../../shared/types'
 import { tweakPayload } from '../../shared/tweak'
@@ -79,8 +80,17 @@ export const api = {
       return payload
     })
   },
-  /** 让服务端中断当前生成；连接不关，中断后服务端会提交已完成的文件。 */
-  stop: (id: string) => request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
+  /**
+   * 让服务端中断当前生成；连接不关，中断后服务端按 mode 决定结局。
+   *
+   * mode='keep'（默认）提交已写完的文件；mode='discard' 什么都不留。
+   * 刻意不在客户端 abort SSE：只有服务端知道哪些文件是完整闭合的。
+   */
+  stop: (id: string, mode: StopMode = 'keep') =>
+    request<{ ok: boolean; mode: StopMode }>(`/api/projects/${encodeURIComponent(id)}/stop`, {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    }),
   createProject: (input: { prompt?: string; provider?: ProviderId; design?: DesignPrefs }) =>
     request<{ project: Project }>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
   getProject: (id: string) =>

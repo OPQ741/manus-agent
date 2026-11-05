@@ -67,6 +67,13 @@ export interface LiveState {
   startedAt: number
   usage: Usage | null
   provider: ProviderInfo | null
+  /**
+   * 流断了（网络中断、服务端重启），这一轮没收到收尾确认。
+   *
+   * 和"停止"不同：停止是用户按的，收尾是确定的；中断是不知道服务端到底提交了没有，
+   * 所以这里保留屏幕上已经长出来的内容，并明确说一句"没收到确认"。
+   */
+  interrupted?: boolean
 }
 
 export const EMPTY_LIVE: LiveState = {
@@ -82,6 +89,7 @@ export const EMPTY_LIVE: LiveState = {
   startedAt: 0,
   usage: null,
   provider: null,
+  interrupted: false,
 }
 
 /** 阶段图标：时间线、状态条共用同一套语义，扫一眼就知道走到哪一步了 */
@@ -437,9 +445,11 @@ function LiveBlock({ live }: { live: LiveState }) {
           </span>
         </div>
         <div className="spacer" />
-        <span className="turn-stage">{live.running ? STAGE_LABEL[stage] : '已完成'}</span>
+        <span className={`turn-stage${live.interrupted && !live.running ? ' is-interrupted' : ''}`}>
+          {live.running ? STAGE_LABEL[stage] : live.interrupted ? '已中断' : '已完成'}
+        </span>
         <span className="turn-clock">
-          <span className="live-dot" />
+          {live.running ? <span className="live-dot" /> : null}
           {fmtSec(elapsed)}
         </span>
       </header>
@@ -540,6 +550,14 @@ function LiveBlock({ live }: { live: LiveState }) {
               status="idle"
               title={<span className="run-warn-text">解析提示：{live.warnings[0]}</span>}
               meta={live.warnings.length > 1 ? `共 ${live.warnings.length} 条` : null}
+              last
+            />
+          ) : null}
+
+          {live.interrupted && !live.running ? (
+            <RunStep
+              status="failed"
+              title={<span className="run-warn-text">连接中断：下面是中断前收到的部分，未必已经保存</span>}
               last
             />
           ) : null}

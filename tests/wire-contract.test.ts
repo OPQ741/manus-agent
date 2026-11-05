@@ -7,9 +7,20 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
+import { assemble, bridgeScript } from '../shared/preview/assemble'
+import { CARRY_KEY } from '../shared/preview/pages'
+import type { FileEntry } from '../shared/types'
 import { isTweakEmpty } from '../shared/theme'
 import { serializedCarriesTweak, tweakPayload } from '../shared/tweak'
 import { accessParams, shareUrlFor } from '../src/lib/share'
+
+const file = (path: string, content: string): FileEntry => ({ path, content, updatedAt: 0 })
+
+/** 一份最小的双页面项目：壳、桥、内嵌文档三条链路都会跑到。 */
+const TWO_PAGES: FileEntry[] = [
+  file('index.html', '<!DOCTYPE html><html><head><title>首页</title></head><body><a href="pages/about.html">关于</a></body></html>'),
+  file('pages/about.html', '<!DOCTYPE html><html><head><title>关于</title></head><body><a href="../index.html">回首页</a></body></html>'),
+]
 
 // node 环境下没有 window：只在"取当前地址"这一条用例里临时注入，
 // 其余用例都显式传参，避免依赖 DOM。
@@ -94,5 +105,92 @@ describe('UT-WIRE-07～11 分享链接：托管网关的访问口令必须透传
       expect(shareUrlFor('slug1234567', 'https://app.example.com')).toBe('https://app.example.com/?sharecode=GATE42#/p/slug1234567')
       expect(accessParams().get('sharecode')).toBe('GATE42')
     })
+  })
+})
+
+describe('UT-WIRE-12～15 多页面路由壳：壳与桥接之间的约定', () => {
+  it('UT-WIRE-12 建帧快照的变量名，壳写与桥读必须完全一致', () => {
+    // 回归点：壳写 __NUCLEUS_CARRY__、桥读 __NUCLEUS_CARRY，少一个下划线。
+    // 现象是跨页数据静默变成 null，不报错、测试不红，只能靠肉眼发现 —— 所以钉成契约。
+    const html = assemble(TWO_PAGES).html
+    expect(html).toContain(`window.${CARRY_KEY}=`)
+    expect(html).toContain(`typeof window.${CARRY_KEY} === 'object'`)
+    expect(CARRY_KEY).toBe('__NUCLEUS_CARRY__')
+    expect(bridgeScript()).toContain(`window.${CARRY_KEY}`)
+  })
+
+  it('UT-WIRE-13 页面写存储上报的 kind，壳监听的也是同一个', () => {
+    // 桥里 setItem 发 { kind: 'storage', op }，壳按 kind === 'storage' 分流。
+    expect(bridgeScript()).toContain("post({ kind: 'storage', op: 'set'")
+    expect(assemble(TWO_PAGES).html).toContain("data.kind === 'storage'")
+  })
+
+  it('UT-WIRE-14 内嵌文档不会提前闭合壳脚本：真正的收尾标签只有一个', () => {
+    // 回归点：壳脚本里只要出现一处裸 </script>，后面的代码就变成文本节点，
+    // 表现是整页白屏 + 控制台一句 "Unexpected token '<'"。
+    // 壳自己只有一个 script，所以"真的"收尾标签必须恰好 1 个；内嵌文档里的
+    // 那几处必须被转义成 <\/script> 才不算数。
+    const html = assemble(TWO_PAGES).html
+    const closes = (html.match(/<\/script>/gi) ?? []).length
+    expect(closes).toBe(1)
+    expect(html).toContain('<\\/script>')
+
+    const start = html.indexOf('<script data-nucleus="pages">')
+    const end = html.indexOf('</script>', start)
+    const code = html.slice(start + '<script data-nucleus="pages">'.length, end)
+    expect(code.trimEnd().endsWith('})();')).toBe(true)
+    expect(() => new Function(code)).not.toThrow()
+  })
+
+  it('UT-WIRE-15 页面内的相对链接按"本页所在目录"解析，不按站点根', () => {
+    // <a href="../index.html"> 在 /about 页里必须指回 /，否则点一下就死链。
+    // 文档整体是塞进 JSON 字符串的，引号在壳里是 \" —— 断言要把这一层算进去。
+    const html = assemble(TWO_PAGES).html
+    expect(html).toContain('window.__NUCLEUS_PAGE__=\\"pages/about.html\\"')
+    expect(bridgeScript()).toContain("'https://nucleus.local/' + String(window.__NUCLEUS_PAGE__)")
+  })
+})
+
+describe('UT-WIRE-16～19 沙箱加固：CSP 与弹窗代理', () => {
+  it('UT-WIRE-16 CSP 注入在最前面，且掐死了 connect-src', () => {
+    // 沙箱挡的是"碰到宿主"，挡不住"把数据发出去" —— 后者靠 connect-src 'none'。
+    const html = assemble([file('index.html', '<html><head><title>t</title></head><body><script>x()</script></body></html>')]).html
+    const cspAt = html.indexOf('Content-Security-Policy')
+    expect(cspAt).toBeGreaterThan(-1)
+    // meta 只对出现在它之后的内容生效，所以必须抢在所有脚本之前
+    expect(cspAt).toBeLessThan(html.indexOf('<script'))
+    expect(html).toContain("connect-src 'none'")
+    expect(html).toContain("default-src 'none'")
+    // 图片/字体/脚本不能一起关掉，否则生成物会整片失色
+    expect(html).toContain('img-src data: blob: https:')
+    expect(html).toContain("'unsafe-inline'")
+    // 多页面里每个页面文档都要有自己的 CSP（srcdoc 逐文档生效）
+    expect(assemble(TWO_PAGES).html.match(/Content-Security-Policy/g)).toHaveLength(2)
+  })
+
+  it('UT-WIRE-17 生成物自带 CSP 时不覆盖（作者意图优先）', () => {
+    const html = assemble([
+      file(
+        'index.html',
+        '<html><head><meta http-equiv="Content-Security-Policy" content="default-src \'self\'"></head><body></body></html>',
+      ),
+    ]).html
+    expect(html.match(/Content-Security-Policy/g)).toHaveLength(1)
+    expect(html).toContain("default-src 'self'")
+  })
+
+  it('UT-WIRE-18 心跳协议：宿主 ping 的字段名与桥接应答的 kind 必须对上', () => {
+    // 对不上的后果是"页面明明活着，却被判定卡死"——遮罩盖住正常应用，比不判还糟。
+    expect(bridgeScript()).toContain('__nucleus_ping')
+    expect(bridgeScript()).toContain("post({ kind: 'pong'")
+    // 单页与多页都要能应答：多页面由路由壳代答（见 pages.ts）
+    expect(assemble(TWO_PAGES).html).toContain('__nucleus_ping')
+  })
+
+  it('UT-WIRE-19 沙箱没有 allow-popups，窗口打开必须走桥接上报', () => {
+    expect(bridgeScript()).toContain("window.open = function")
+    expect(bridgeScript()).toContain("post({ kind: 'open'")
+    // 外链与 target=_blank 也一并收上来，否则"点了没反应"
+    expect(bridgeScript()).toContain('_blank')
   })
 })

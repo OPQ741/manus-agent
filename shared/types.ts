@@ -118,8 +118,19 @@ export type AgentEvent =
   /**
    * partial=true 表示这次是用户主动中断后保留的版本（只含已完成文件）。
    * kept = 实际保留下来的文件数；为 0 表示这次什么都没写完，没有产生新版本。
+   *
+   * discarded=true 是「放弃本轮」：连已写完的文件也不要，项目保持中断前的版本，
+   * 此时 version 是旧版本号、kept 恒为 0。
    */
-  | { type: 'done'; version: number; usage: Usage; provider?: ProviderInfo; partial?: boolean; kept?: number }
+  | {
+      type: 'done'
+      version: number
+      usage: Usage
+      provider?: ProviderInfo
+      partial?: boolean
+      kept?: number
+      discarded?: boolean
+    }
   | { type: 'error'; code: ApiErrorCode; message: string }
 
 export type ApiErrorCode =
@@ -272,6 +283,17 @@ export interface ShareDetail {
   html: string
   checks: Check[]
 }
+
+/**
+ * 停止的两副面孔。
+ *
+ * - keep（默认）：中断引擎，把**已经写完**的文件提交成新版本 —— 「先看看写出来的部分」；
+ * - discard：中断后什么都不留，项目停在中断前那一版 —— 「这一轮方向不对，别污染我」。
+ *
+ * 两者都必须走服务端中断（而不是客户端 abort 掉 SSE）：只有服务端知道哪些文件是
+ * 完整闭合的，也只有它能决定要不要 commit。
+ */
+export type StopMode = 'keep' | 'discard'
 
 export interface GenerateRequest {
   prompt: string

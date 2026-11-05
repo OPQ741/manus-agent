@@ -1,14 +1,16 @@
-import { Button, Tooltip } from 'antd'
+import { Button, Dropdown, Tooltip } from 'antd'
 import {
   BulbOutlined,
   CheckOutlined,
   ClockCircleOutlined,
   CodeOutlined,
+  DownOutlined,
   FileTextOutlined,
   LoadingOutlined,
   SafetyCertificateOutlined,
   StopOutlined,
 } from '@ant-design/icons'
+import type { StopMode } from '../../shared/types'
 import { fmtSec } from '../lib/format'
 import { effectiveStage, RUN_STAGES, runProgress, runningFile, stageIndex, stageText, type RunStage } from '../lib/run-stage'
 import { useTicker, type LiveState } from './ChatStream'
@@ -29,7 +31,7 @@ const STAGE_ICON: Record<RunStage, React.ReactNode> = {
   verify: <SafetyCertificateOutlined />,
 }
 
-export function RunStatusBar({ live, onStop }: { live: LiveState; onStop: () => void }) {
+export function RunStatusBar({ live, onStop }: { live: LiveState; onStop: (mode: StopMode) => void }) {
   // 秒表自己走：状态条出现在对话流之外，不该依赖那边的 ticker 顺带刷新
   const now = useTicker(live.running)
   const elapsed = live.startedAt ? now - live.startedAt : 0
@@ -59,10 +61,33 @@ export function RunStatusBar({ live, onStop }: { live: LiveState; onStop: () => 
         <Tooltip title="中断这一轮；已经写完的文件会保留成新版本">
           {/* aria-label 与图标并存时无障碍名会变成「stop 停止」，
               按名字定位的脚本和读屏都会被这半截英文带偏，所以显式钉死中文名 */}
-          <Button size="small" danger icon={<StopOutlined />} onClick={onStop} aria-label="停止">
+          <Button size="small" danger icon={<StopOutlined />} onClick={() => onStop('keep')} aria-label="停止">
             停止
           </Button>
         </Tooltip>
+
+        {/*
+          「停止」= 保留已写完的文件，「放弃」= 连写好的也不要。
+          后者是破坏性的，所以收进二级菜单：一次点击不可能误触，也不是没有出口。
+        */}
+        <Dropdown
+          trigger={['click']}
+          placement="topRight"
+          menu={{
+            items: [
+              {
+                key: 'discard',
+                danger: true,
+                label: '放弃本轮（已写完的也不保留）',
+              },
+            ],
+            onClick: ({ key }) => {
+              if (key === 'discard') onStop('discard')
+            },
+          }}
+        >
+          <Button size="small" type="text" danger icon={<DownOutlined />} aria-label="更多停止方式" title="更多停止方式" />
+        </Dropdown>
       </div>
 
       {/*

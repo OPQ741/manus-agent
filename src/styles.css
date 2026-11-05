@@ -1868,6 +1868,8 @@ pre {
   padding: 12px;
   background: var(--bg-soft);
   overflow: auto;
+  /* 看门狗遮罩按它定位：遮罩要盖住的正是这块"预览区域" */
+  position: relative;
 }
 
 .frame-wrap iframe {
@@ -2632,4 +2634,120 @@ pre {
   .settings {
     padding: 18px 14px 48px;
   }
+}
+
+/* ---------------------- 错误重试 / 断网 / 崩溃兜底 ---------------------- */
+
+/*
+ * 「将重试：…」这一行专门回答"点下去会发生什么"。
+ * 错误条已经说了哪里出问题，如果不说清楚重发的是哪句话，
+ * 用户只能靠记忆猜自己上次说了什么 —— 而他们刚刚才可能在输入框里改了草稿。
+ */
+.error-retry-hint {
+  margin-top: 6px;
+  padding-left: 8px;
+  border-left: 2px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  font-size: 12px;
+  color: var(--ink-soft);
+  word-break: break-word;
+}
+
+.composer-offline {
+  font-size: 11.5px;
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+/* 中断的回合：阶段胶囊从主色换成警示色，和"已完成"一眼可分 */
+.turn-stage.is-interrupted {
+  color: var(--warn);
+  background: var(--notice-warn-bg);
+}
+
+/* 断网提示常驻底部：用 fixed 而不是插进布局，避免页面跟着上下跳一下 */
+.offline-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 1200;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+  background: var(--notice-warn-bg);
+  color: var(--ink);
+  font-size: 12px;
+  box-shadow: var(--shadow);
+}
+
+/* 面板级兜底：一张安静的卡片，不抢整屏 */
+.boundary-panel {
+  margin: 10px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.boundary-hint {
+  margin: 4px 0 10px !important;
+  font-size: 12px;
+}
+
+.boundary-detail {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.boundary-detail summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.boundary-detail pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 200px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--bg-soft);
+  color: var(--ink-soft);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+/*
+ * 看门狗遮罩：预览的渲染线程被死循环占住时的唯一说法。
+ *
+ * 不能用"白屏 + 控制台红字"解释这件事 —— 死循环连报错都产生不了，
+ * 所以遮罩必须自带三件事：发生了什么（没有响应）、为什么（可能死循环）、
+ * 现在点哪里（重新加载）。半透明 + 模糊是为了让用户看出"底下确实有东西"。
+ */
+.frame-stalled {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--bg-soft) 78%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.fs-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 400px;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
 }

@@ -9,9 +9,10 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { AgentEvent, ApiErrorCode, FileEntry, GenerateRequest } from '../../shared/types'
+import type { AgentEvent, ApiErrorCode, FileEntry, GenerateRequest, StopMode } from '../../shared/types'
 import { PROMPT_MAX_LENGTH } from '../../shared/types'
 import { QueueFullError, projectedWait, waitForSlot } from '../agent/queue'
+import { projectContext } from '../agent/history'
 import { resolveChain, type ResolvedCatalog, type ResolvedProvider } from '../agent/providers'
 import { canFailover, createSink, runGeneration, ModelEngine, type GenContext, type GenSink } from '../agent/runner'
 import { HttpError } from '../http/errors'
@@ -27,14 +28,30 @@ const MAX_REPAIR_PASSES = Number(process.env.NUCLEUS_MAX_REPAIR_PASSES ?? 2)
 /** 超过这个等待就提前告诉用户"前面在排队"。 */
 const QUEUE_NOTICE_MS = 1_000
 
-/** 正在进行的生成：项目 id → 中断控制器。用来实现「停止并保留」。 */
-const running = new Map<string, AbortController>()
+/**
+ * 正在进行的生成：项目 id → 句柄。
+ *
+ * 句柄里除了 AbortController 还要带一个 `mode`：`/stop` 是另一个请求，
+ * 它得在**中断发生之前**把「要保留还是要丢弃」写进来 —— 等 commit 时再查 Map
+ * 是行不通的（那时 finally 已经把条目删了）。
+ */
+interface RunHandle {
+  controller: AbortController
+  mode: StopMode
+}
 
-/** POST /api/projects/:id/stop 的唯一入口：有在跑的才中断，没有就是 409。 */
-export function abortGeneration(projectId: string): boolean {
-  const controller = running.get(projectId)
-  if (!controller) return false
-  controller.abort()
+const running = new Map<string, RunHandle>()
+
+/**
+ * POST /api/projects/:id/stop 的唯一入口：有在跑的才中断，没有就是 409。
+ *
+ * 默认 keep（保留已写完的文件）：老客户端不带 mode，行为必须和以前一致。
+ */
+export function abortGeneration(projectId: string, mode: StopMode = 'keep'): boolean {
+  const handle = running.get(projectId)
+  if (!handle) return false
+  handle.mode = mode
+  handle.controller.abort()
   return true
 }
 
@@ -149,14 +166,35 @@ export async function handleGeneration(
   }
 
   const controller = new AbortController()
+  /** 客户端断开走这条回调：没人收结果了，默认按「保留已写完的文件」处理 */
+  const handle: RunHandle = { controller, mode: 'keep' }
   // 客户端断开 → 中断上游；继续写会 ERR_STREAM_DESTROYED，交给 SseChannel 兜住
   const sse = openSse(res, () => controller.abort())
   const send = sse.send
 
-  running.set(projectId, controller)
+  running.set(projectId, handle)
+  /**
+   * 上下文必须在写入本轮用户消息**之前**取：否则 history 里会多出刚刚这句，
+   * 与正文重复一遍，模型会以为"用户连着说了两次同样的话"。
+   */
+  const before = store.detail(projectId)
+  const history = projectContext({
+    messages: before?.messages ?? [],
+    versions: before?.versions ?? [],
+    plan: project.plan,
+    design: project.design,
+    prompt,
+  })
   await store.appendMessage({ projectId, role: 'user', kind: 'text', content: prompt })
 
-  const base = { prompt, design: project.design, files: project.files, plan: project.plan, repair: undefined as GenContext['repair'] }
+  const base = {
+    prompt,
+    design: project.design,
+    files: project.files,
+    plan: project.plan,
+    history,
+    repair: undefined as GenContext['repair'],
+  }
 
   let result: AttemptResult | null = null
   let used: ResolvedProvider | null = null
@@ -271,8 +309,33 @@ export async function handleGeneration(
       role: 'agent',
       kind: 'error',
       content: failed.message + (tried.length > 1 ? `（已尝试：${tried.join(' → ')}）` : ''),
-      meta: { code: failed.code, tried },
+      /**
+       * prompt 必须落库：错误条上的「重新生成」要用**失败的那条指令**重试，
+       * 而它以前只活在前端的 useRef 里 —— 刷新一次就丢，重试只能拿输入框的草稿。
+       */
+      meta: { code: failed.code, tried, prompt },
     })
+    sse.end()
+    return
+  }
+
+  /**
+   * 放弃本轮：不 commit、不改版本，只在历史里留一条"我丢掉了这一轮"。
+   *
+   * 和「停止并保留」的区别只在 commit 这一步 —— 上游该中断的已经中断了，
+   * 所以这里不需要再碰 controller，直接返回即可。
+   */
+  if (aborted && handle.mode === 'discard') {
+    await store.appendMessage({
+      projectId,
+      role: 'agent',
+      kind: 'notice',
+      content: `已放弃本轮生成，项目仍停留在 v${project.version}，没有改动任何文件。`,
+      meta: { discarded: true, written: sink.completed.size },
+    })
+    if (!sse.gone) {
+      send({ type: 'done', version: project.version, usage: sink.usage, partial: true, kept: 0, discarded: true })
+    }
     sse.end()
     return
   }
@@ -289,6 +352,14 @@ export async function handleGeneration(
 
   // 中断保留：没有任何完整文件落库，就不产生版本（避免历史里全是空版本）
   if (aborted && changedCount === 0 && removedCount === 0) {
+    // 也要留一条记录：否则这一轮只剩用户那句话挂在那里，像发出去就没了
+    await store.appendMessage({
+      projectId,
+      role: 'agent',
+      kind: 'notice',
+      content: `已停止：这一轮还没有任何文件写完，项目保持 v${project.version} 不变。`,
+      meta: { stopped: true, kept: 0 },
+    })
     if (!sse.gone) {
       send({ type: 'done', version: project.version, usage: sink.usage, partial: true, kept: 0 })
       sse.end()
