@@ -20,7 +20,7 @@ import type {
   ProviderInfo,
   Usage,
 } from '../../shared/types'
-import { assemble } from '../../shared/preview/assemble'
+import { assembleFiles } from '../services/preview'
 import { LlmError, streamChat, type LlmConfig } from './llm'
 import type { ResolvedProvider } from './providers'
 import { editTurnMessages, firstTurnMessages, repairMessages } from './prompts'
@@ -261,7 +261,7 @@ export async function* runGeneration(
     content,
     updatedAt: Date.now(),
   }))
-  const result = assemble(fileList)
+  const result = assembleFiles(fileList)
   sink.checks = result.checks
   sink.missing = result.missing
   sink.broken = result.broken

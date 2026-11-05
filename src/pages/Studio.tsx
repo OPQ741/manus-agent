@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import type { TextAreaRef } from 'antd/es/input/TextArea'
 import { Alert, Button, Flex, Input, Result, Space, Spin, Tabs, Tooltip, Typography } from 'antd'
 import {
@@ -11,7 +12,17 @@ import {
   SendOutlined,
   ShareAltOutlined,
 } from '@ant-design/icons'
-import type { AgentEvent, DesignTweak, FileEntry, Project, ProjectDetail, PublicSettings, StopMode } from '../../shared/types'
+import type {
+  AgentEvent,
+  Check,
+  DesignTweak,
+  FileChange,
+  FileEntry,
+  Project,
+  ProjectDetail,
+  PublicSettings,
+  StopMode,
+} from '../../shared/types'
 import { assemble } from '../../shared/preview/assemble'
 import { ChatStream, EMPTY_LIVE, type LiveState } from '../components/ChatStream'
 import { CodePanel } from '../components/CodePanel'
@@ -20,6 +31,7 @@ import { ModelMenu } from '../components/ModelMenu'
 import { PreviewPanel } from '../components/PreviewPanel'
 import { ProjectSettingsModal } from '../components/ProjectSettingsModal'
 import { RunStatusBar } from '../components/RunStatusBar'
+import { Splitter } from '../components/Splitter'
 import { TopBar } from '../components/TopBar'
 import { VersionPanel } from '../components/VersionPanel'
 import { Badge, toast } from '../components/ui'
@@ -27,6 +39,9 @@ import { ApiError, api, generate } from '../lib/api'
 import { explainError } from '../lib/errors'
 import { readModelChoice, writeModelChoice, type ModelChoice } from '../lib/model-prefs'
 import { useOnline } from '../lib/online'
+import { readChatWidth, writeChatWidth } from '../lib/pane-width'
+import { bundlePreview } from '../lib/react-preview'
+import { batchRepairPrompt, checkRepairPrompt, fileForCheck } from '../lib/repair'
 import { failedPromptOf } from '../lib/retry'
 import { applyStorageMessage } from '../lib/seed'
 import { shareUrlFor } from '../lib/share'
@@ -143,6 +158,13 @@ export function StudioPage({ id }: { id: string }) {
   /** 本项目的模型选择（null = 跟随设置） */
   const [modelChoice, setModelChoice] = useState<ModelChoice | null>(null)
   const [editOpen, setEditOpen] = useState(false)
+  /** 左右分栏宽度：每台浏览器自己记着，换项目不该重置 */
+  const [chatWidth, setChatWidth] = useState(readChatWidth)
+  /** 手动改文件时被"点名"的文件（来自自检项的「手动改」） */
+  const [focusFile, setFocusFile] = useState<string | null>(null)
+  const [savingFiles, setSavingFiles] = useState(false)
+  /** 生成过程中本地打包出来的 React 预览（异步，且只有模块工程才有） */
+  const [bundledHtml, setBundledHtml] = useState('')
 
   const abortRef = useRef<AbortController | null>(null)
   const busyRef = useRef(false)
@@ -200,6 +222,37 @@ export function StudioPage({ id }: { id: string }) {
       return assemble([...merged.values()], detail.project.tweak).html
     } catch {
       return ''
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doneKey, baseKey, live.running, detail])
+
+  /**
+   * React 工程的实时预览：打包是异步的（sucrase + React 运行时按需加载），
+   * 所以不能塞进上面那个同步 useMemo。触发条件与它一致（每写完一个文件一次），
+   * 再加 120ms 防抖 —— 一次生成里 file_end 可能连着来好几个。
+   *
+   * 非模块工程返回 null，这里就保持空串，预览继续用同步组装的那份。
+   */
+  useEffect(() => {
+    if (!live.running || !detail || !doneKey) {
+      setBundledHtml('')
+      return
+    }
+    const merged = new Map<string, FileEntry>()
+    for (const file of detail.project.files) merged.set(file.path, file)
+    for (const file of live.files) {
+      if (file.done) merged.set(file.path, { path: file.path, content: file.content, updatedAt: Date.now() })
+    }
+    const list = [...merged.values()]
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void bundlePreview(list, detail.project.tweak).then((result) => {
+        if (!cancelled) setBundledHtml(result?.html ?? '')
+      })
+    }, 120)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doneKey, baseKey, live.running, detail])
@@ -538,6 +591,48 @@ export function StudioPage({ id }: { id: string }) {
     void run(text)
   }
 
+  /** 自检项 → 直接改代码：能定位到具体文件就选中并进编辑态。 */
+  const openCheckFile = (check: Check) => {
+    setTab('code')
+    const path = fileForCheck(check, project.files)
+    if (path) setFocusFile(path)
+    else toast('这一项没有对应到单个文件，请在代码页里找一下（多半是入口 HTML）')
+  }
+
+  /** 自检项 → 定向修复：把失败原因和合法取值一起交给模型，而不是让它重新猜。 */
+  const repairCheck = (check: Check) => void run(checkRepairPrompt(check))
+  const repairAll = (list: Check[]) => {
+    if (list.length > 0) void run(batchRepairPrompt(list))
+  }
+
+  /**
+   * 保存手动改动。
+   *
+   * 必须带 expectVersion：这个页面可能停在 v3，而另一个标签页已经生成了 v4，
+   * 直接写进去就是把别人那一轮静默抹掉。
+   */
+  const saveFiles = async (changes: FileChange[]): Promise<boolean> => {
+    if (busyRef.current) {
+      toast('正在生成，等这一轮结束再改文件')
+      return false
+    }
+    setSavingFiles(true)
+    try {
+      const result = await api.saveFiles(id, { changes, expectVersion: project.version })
+      await refresh()
+      toast(`已保存为 v${result.project.version}`)
+      return true
+    } catch (err) {
+      const apiError = err as ApiError
+      toast(apiError.message || '保存失败')
+      // 版本冲突：把页面拉回服务端的真实状态，别让用户对着过期的代码继续改
+      if (apiError.code === 'busy') await refresh().catch(() => undefined)
+      return false
+    } finally {
+      setSavingFiles(false)
+    }
+  }
+
   return (
     <>
       <TopBar
@@ -588,7 +683,7 @@ export function StudioPage({ id }: { id: string }) {
         }
       />
 
-      <div className="studio">
+      <div className="studio" style={{ '--chat-w': `${chatWidth}px` } as CSSProperties}>
         <section className="chatpane" aria-label="对话">
           <ChatStream messages={messages} live={live} pendingUser={pendingUser} />
 
@@ -685,6 +780,16 @@ export function StudioPage({ id }: { id: string }) {
           </div>
         </section>
 
+        {/* 分栏条：拖 / 键盘方向键 / 双击复位，宽度记在本地 */}
+        <Splitter
+          width={chatWidth}
+          onResize={setChatWidth}
+          onCommit={(next) => {
+            setChatWidth(next)
+            writeChatWidth(next)
+          }}
+        />
+
         <section className="workspace" aria-label="工作区">
           {/* 右半屏崩了不该把左侧对话一起带走：面板级兜底，重挂即可恢复 */}
           <ErrorBoundary scope="panel" label="预览与代码">
@@ -704,7 +809,7 @@ export function StudioPage({ id }: { id: string }) {
                     <PreviewPanel
                       projectId={id}
                       html={previewHtml}
-                      liveHtml={livePreviewHtml}
+                      liveHtml={bundledHtml || livePreviewHtml}
                       checks={project.checks}
                       errors={runtimeErrors}
                       tweak={project.tweak}
@@ -712,6 +817,9 @@ export function StudioPage({ id }: { id: string }) {
                       onTweakSave={saveTweak}
                       onHeal={heal}
                       onRefresh={() => void refresh()}
+                      onRepairCheck={repairCheck}
+                      onOpenCheckFile={openCheckFile}
+                      onRepairAll={repairAll}
                     />
                   ),
                 },
@@ -723,7 +831,15 @@ export function StudioPage({ id }: { id: string }) {
                     </Space>
                   ),
                   children: (
-                    <CodePanel files={project.files} liveFiles={live.files} followPath={live.running ? runningFileRef : null} />
+                    <CodePanel
+                      files={project.files}
+                      liveFiles={live.files}
+                      followPath={live.running ? runningFileRef : null}
+                      focusPath={focusFile}
+                      readOnly={busy}
+                      saving={savingFiles}
+                      onSave={saveFiles}
+                    />
                   ),
                 },
                 {

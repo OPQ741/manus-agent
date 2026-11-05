@@ -1,8 +1,10 @@
 import type {
   AgentEvent,
   ApiErrorCode,
+  Check,
   DesignPrefs,
   DesignTweak,
+  FileChange,
   Project,
   ProjectDetail,
   ProjectSummary,
@@ -120,6 +122,20 @@ export const api = {
     }),
   deleteProject: (id: string) =>
     request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  /**
+   * 保存手动改的文件。
+   *
+   * `expectVersion` 是服务端的乐观锁：版本对不上就 409，而不是默默覆盖掉
+   * 另一个标签页（或上一轮生成）刚写进去的内容。
+   */
+  saveFiles: (
+    id: string,
+    input: { changes: FileChange[]; expectVersion?: number; note?: string },
+  ) =>
+    request<{ project: Project; previewHtml: string; checks: Check[] }>(
+      `/api/projects/${encodeURIComponent(id)}/files`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
   rollback: (id: string, seq: number) =>
     request<{ project: Project; version: Version }>(`/api/projects/${encodeURIComponent(id)}/rollback`, {
       method: 'POST',

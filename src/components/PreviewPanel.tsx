@@ -47,6 +47,12 @@ interface Props {
   onTweakSave: (next: DesignTweak | undefined) => Promise<void>
   onHeal: () => void
   onRefresh: () => void
+  /** 针对单个失败项让 Agent 定向修复 */
+  onRepairCheck?: (check: Check) => void
+  /** 跳过 Agent，直接去代码里改 */
+  onOpenCheckFile?: (check: Check) => void
+  /** 把失败的项一次性打包修复 */
+  onRepairAll?: (checks: Check[]) => void
 }
 
 /**
@@ -129,6 +135,9 @@ export function PreviewPanel({
   onTweakSave,
   onHeal,
   onRefresh,
+  onRepairCheck,
+  onOpenCheckFile,
+  onRepairAll,
 }: Props) {
   const [device, setDevice] = useState<Device>('desktop')
   const [nonce, setNonce] = useState(0)
@@ -244,6 +253,38 @@ export function PreviewPanel({
 
   return (
     <>
+      {/*
+        阻断项的常驻说明：以前它只藏在「N 项阻断」这个小胶囊后面，
+        用户看到的是白屏 + 一个不解释的数字，根本不知道该点哪。
+        这里把它提到预览上方，并直接给出两条出路（改代码 / 让 Agent 修）。
+      */}
+      {blocking ? (
+        <Alert
+          className="error-banner"
+          type="error"
+          showIcon
+          message={
+            <Text>
+              阻断项「{blocking.label}」：<Text className="mono">{blocking.detail ?? '未通过'}</Text>
+            </Text>
+          }
+          action={
+            <Space size={6}>
+              {onOpenCheckFile ? (
+                <Button size="small" onClick={() => onOpenCheckFile(blocking)}>
+                  手动改
+                </Button>
+              ) : null}
+              {onRepairCheck ? (
+                <Button size="small" type="primary" onClick={() => onRepairCheck(blocking)}>
+                  让 Agent 修复
+                </Button>
+              ) : null}
+            </Space>
+          }
+        />
+      ) : null}
+
       {errors.length > 0 ? (
         <Alert
           className="error-banner"
@@ -352,22 +393,66 @@ export function PreviewPanel({
         ) : null}
 
         {showChecks && checks.length > 0 ? (
-          <Card size="small" className="health-panel">
-            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <Card
+            size="small"
+            className="health-panel"
+            title={
+              <Text style={{ fontSize: 12.5 }}>
+                自检 · {passed} 项通过{failed + warned > 0 ? `，${failed + warned} 项待处理` : ''}
+              </Text>
+            }
+            extra={
+              onRepairAll && failed + warned > 0 ? (
+                <Button
+                  size="small"
+                  type="primary"
+                  ghost
+                  onClick={() => onRepairAll(checks.filter((check) => !check.ok))}
+                >
+                  全部修复
+                </Button>
+              ) : null
+            }
+          >
+            <Space direction="vertical" size={2} style={{ width: '100%' }}>
               {checks.map((check) => (
-                <Flex key={check.id} align="flex-start" gap={7} className={`health-row ${check.ok ? 'ok' : check.level}`}>
-                  {check.ok ? (
-                    <CheckCircleFilled style={{ color: 'var(--ok)', marginTop: 3 }} />
-                  ) : (
-                    <ExclamationCircleFilled style={{ color: 'var(--warn)', marginTop: 3 }} />
-                  )}
-                  <Text style={{ fontSize: 12.5 }}>{check.label}</Text>
-                  {check.detail ? (
-                    <Text type="secondary" className="mono" style={{ fontSize: 11.5, marginLeft: 'auto' }}>
-                      {check.detail}
-                    </Text>
-                  ) : null}
-                </Flex>
+                <div key={check.id} className={`health-row ${check.ok ? 'ok' : check.level}`}>
+                  <Flex align="flex-start" gap={7}>
+                    {check.ok ? (
+                      <CheckCircleFilled style={{ color: 'var(--ok)', marginTop: 3 }} />
+                    ) : (
+                      <ExclamationCircleFilled
+                        style={{ color: check.level === 'block' ? 'var(--danger)' : 'var(--warn)', marginTop: 3 }}
+                      />
+                    )}
+                    <div className="health-copy">
+                      <Text style={{ fontSize: 12.5 }}>{check.label}</Text>
+                      {check.detail ? (
+                        <Text type="secondary" className="mono health-detail">
+                          {check.detail}
+                        </Text>
+                      ) : null}
+                    </div>
+                    {/*
+                      失败项必须给出下一步：只报"未通过"而不给动作，
+                      等于把问题丢回给用户，而他能做的只有重开一轮碰运气。
+                    */}
+                    {!check.ok ? (
+                      <Space size={2} className="health-actions">
+                        {onOpenCheckFile ? (
+                          <Button size="small" type="text" onClick={() => onOpenCheckFile(check)}>
+                            手动改
+                          </Button>
+                        ) : null}
+                        {onRepairCheck ? (
+                          <Button size="small" type="link" onClick={() => onRepairCheck(check)}>
+                            让 Agent 修
+                          </Button>
+                        ) : null}
+                      </Space>
+                    ) : null}
+                  </Flex>
+                </div>
               ))}
             </Space>
           </Card>

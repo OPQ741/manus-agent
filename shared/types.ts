@@ -53,6 +53,17 @@ export interface FileEntry {
   updatedAt: number
 }
 
+/**
+ * 手动编辑的一条变更。
+ *
+ * `content: null` 是删除 —— 必须能和"内容为空字符串"区分开：
+ * 清空一个文件（保留空文件）和删掉它是两件事。
+ */
+export interface FileChange {
+  path: string
+  content: string | null
+}
+
 export interface PlanFile {
   path: string
   purpose: string

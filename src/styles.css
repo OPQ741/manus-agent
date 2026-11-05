@@ -716,7 +716,12 @@ pre {
 
 .studio {
   display: grid;
-  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  /*
+   * 三列：对话 / 分隔条 / 工作区。
+   * 中间那列是真实占位（不是负 margin 叠在边界上），这样两边的宽度都算得准，
+   * 拖到极限时也不会把内容压出横向滚动条。宽度由 Studio 用 --chat-w 注入。
+   */
+  grid-template-columns: var(--chat-w, 380px) auto minmax(0, 1fr);
   height: calc(100vh - 58px);
 }
 
@@ -728,7 +733,61 @@ pre {
   min-width: 0;
   min-height: 0;
   background: var(--surface);
+}
+
+/*
+ * 拖拽分隔条。
+ *
+ * 视觉上只是一根 1px 的线 + 一道悬停高亮，但可点击区域有 9px ——
+ * 1px 的可拖拽区在触控板和 4K 屏上几乎抓不住。
+ */
+.splitter {
+  position: relative;
+  width: 9px;
+  cursor: col-resize;
+  background: var(--surface);
   border-right: 1px solid var(--line);
+  touch-action: none;
+}
+
+.splitter::before {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 3px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.splitter:hover::before,
+.splitter:focus-visible::before {
+  background: var(--accent-soft);
+}
+
+.splitter.is-dragging::before {
+  background: var(--accent);
+}
+
+.splitter:focus-visible {
+  outline: none;
+}
+
+/* 中间的握把：告诉用户"这里能拖"，纯光标变化太隐蔽 */
+.splitter-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 36px;
+  transform: translate(-50%, -50%);
+  border-radius: 2px;
+  background: var(--line);
+  pointer-events: none;
+}
+
+.splitter:hover .splitter-grip,
+.splitter.is-dragging .splitter-grip {
+  background: var(--accent);
 }
 
 .chat-scroll {
@@ -1860,6 +1919,45 @@ pre {
   color: var(--danger);
 }
 
+/* 一项一行：左边图标、中间"标签 + 原因"、右边动作 */
+.health-row {
+  width: 100%;
+  padding: 3px 0;
+}
+
+.health-row > .ant-flex {
+  width: 100%;
+}
+
+.health-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.health-detail {
+  font-size: 11.5px;
+  /* 长路径 / 长报错要能折行，否则会把右侧的修复按钮挤出可视区 */
+  overflow-wrap: anywhere;
+}
+
+.health-actions {
+  flex: none;
+  padding-left: 8px;
+}
+
+.health-panel .ant-card-head {
+  min-height: 0;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+
+.health-panel .ant-card-head-title {
+  padding: 8px 0;
+}
+
 .frame-wrap {
   flex: 1;
   min-height: 0;
@@ -2194,6 +2292,72 @@ pre {
   font-size: 12.5px;
   line-height: 1.65;
   tab-size: 2;
+}
+
+/* 未保存标记：文件名旁边的实心小点，比"*"更不打扰阅读 */
+.code-dirty {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/*
+ * 编辑态：透明 textarea 叠在着色层上。
+ * 两层的字体/行高/内边距/换行策略必须逐项一致 —— 差 1px 光标就会和文字错位，
+ * 而这是"编辑器看起来坏了"最典型的症状。所以这些量只在这里写一次。
+ */
+.code-edit {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--code-bg);
+}
+
+.code-edit-layer {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 14px 16px 40px;
+  border: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.code-edit-view {
+  z-index: 0;
+  color: var(--code-ink);
+  pointer-events: none;
+  /* 滚动条只留 textarea 那一份，否则右侧会出现两条并排的杠 */
+  scrollbar-width: none;
+}
+
+.code-edit-view::-webkit-scrollbar {
+  display: none;
+}
+
+.code-edit-input {
+  z-index: 1;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--code-ink);
+  resize: none;
+  outline: none;
+}
+
+.code-edit-input::selection {
+  background: color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+.code-edit-input::placeholder {
+  color: var(--muted);
 }
 
 .tok-com {
@@ -2584,6 +2748,11 @@ pre {
     grid-template-columns: 1fr;
     height: auto;
     min-height: calc(100vh - 58px);
+  }
+
+  /* 上下堆叠时没有"左右"可调，分隔条直接消失（否则会多出一条空的 9px 竖线） */
+  .splitter {
+    display: none;
   }
 
   .chatpane {

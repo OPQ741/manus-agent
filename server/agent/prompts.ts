@@ -8,6 +8,7 @@
  */
 
 import type { DesignPrefs, FileEntry, Plan } from '../../shared/types'
+import { isModuleProject } from '../../shared/preview/bundle'
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -58,6 +59,15 @@ export const SYSTEM_PROMPT = `你是 Nucleus 的应用生成引擎，一名擅�
 - 每个页面必须是**完整 HTML 文档**（含 <html> / <head> / <body>），不要只给一段 <section>。
 - 多页可以共用同一份 styles.css；脚本建议每页一个（about.js），也可以共用，平台的预览按页面隔离运行，不会互相干扰。
 
+# React 工程（**只在用户明确要求** React / 组件化 / TypeScript 时使用）
+- 目录结构固定：index.html（只有 #root 与一个模块脚本）、src/main.jsx、src/App.jsx、src/components/*.jsx、styles.css。
+- index.html 必须写 <script type="module" src="/src/main.jsx"></script>，这是平台识别模块工程的唯一入口。
+- 组件用函数式 + hooks；文件之间用相对路径互相 import（import { Card } from './components/Card'，扩展名可省）。
+- **只能 import react 与 react-dom/client**：平台已把它们内置进预览，其他 npm 包一律不可用（沙箱没有网络也没有包管理器）。
+- 不要输出 package.json / vite.config / 构建脚本：平台会在浏览器里把整个工程打包成单文件 HTML。
+- 样式写在 styles.css 里，由平台收集；不要在组件里塞 style 标签或依赖 CSS Module。
+- 仍然遵守下面全部设计系统与图标规则（data-icon 在 React 里同样有效）。
+
 # 设计令牌契约（决定"实时微调"能不能用，必须遵守）
 - 主色必须写成 CSS 变量 --accent，圆角必须写成 --radius，都定义在 :root 上：
   :root { --accent: #4B3BFF; --radius: 14px; }
@@ -84,6 +94,25 @@ export const SYSTEM_PROMPT = `你是 Nucleus 的应用生成引擎，一名擅�
 - 只用原生 API，不假设任何全局库存在。
 
 ${DESIGN_SYSTEM}`
+
+/**
+ * 已经是 React 工程时补上的"不要退回原生"约束。
+ *
+ * 少了这段，模型在第二轮很容易把整个工程重写成一份 `<script src="app.js">`：
+ * 它看到的是"要改个颜色"，最省事的路径就是回到它最熟的原生写法 ——
+ * 而那样一来打包器找不到模块入口，预览直接变成阻断项。
+ */
+const REACT_KEEP = `
+
+# 当前项目是 React + JSX 模块工程（必须保持）
+- 入口是 index.html 里的 \`<script type="module" src="/src/main.jsx">\`，**不要**改回内联脚本或原生 app.js。
+- 改动落在对应的 .jsx/.tsx 文件里；组件、hooks、props 的写法保持不变。
+- 只允许 import \`react\` 与 \`react-dom/client\`；样式写到 styles.css。
+- 不要输出 package.json / 构建配置：平台会在浏览器里自动打包。`
+
+export function stackAddendum(files: FileEntry[]): string {
+  return isModuleProject(files) ? REACT_KEEP : ''
+}
 
 export function firstTurnMessages(prompt: string, design: DesignPrefs): ChatMessage[] {
   return [
@@ -118,7 +147,7 @@ export function repairMessages(
   const context = renderFiles(files, prompt)
   const list = repair.map((item) => `- ${item.path}：${item.reason}`).join('\n')
   return [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: SYSTEM_PROMPT + stackAddendum(files) },
     {
       role: 'user',
       content: `${designBrief(design)}
@@ -158,7 +187,7 @@ export function editTurnMessages(
   const budget = Math.max(MAX_CONTEXT_CHARS - context.length, 8_000)
   const contextFiles = renderFiles(files, prompt, budget)
   return [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: SYSTEM_PROMPT + stackAddendum(files) },
     {
       role: 'user',
       content: `${designBrief(design)}

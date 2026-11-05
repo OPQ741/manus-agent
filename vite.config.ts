@@ -31,6 +31,22 @@ const BUILD = readBuildMeta()
 
 export default defineConfig({
   plugins: [react()],
+  /**
+   * 预览沙箱要自带 React 运行时（`connect-src 'none'`，取不到 CDN），
+   * 而 react 18 的 exports 映射没有导出 `./umd/*`，裸路径 import 会被拦。
+   * 用别名指向真实文件，再用 `?raw` 读成字符串 —— 只走构建期，不进主包（见 react-preview.ts 的懒加载）。
+   */
+  resolve: {
+    alias: {
+      /*
+       * 别名必须带上 `?raw`：@rollup/plugin-alias 对字符串 find 的匹配规则是
+       * `id === find || id.startsWith(find + '/')`，写 `react-umd` 是匹配不到
+       * `react-umd?raw` 的（dev 下可能侥幸通过，build 会直接报"无法解析"）。
+       */
+      'react-umd?raw': `${ROOT}node_modules/react/umd/react.production.min.js?raw`,
+      'react-dom-umd?raw': `${ROOT}node_modules/react-dom/umd/react-dom.production.min.js?raw`,
+    },
+  },
   define: {
     /**
      * 只把提交信息注入前端，不注入构建时间。

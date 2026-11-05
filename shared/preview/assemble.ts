@@ -16,6 +16,7 @@
 import type { Check, DesignTweak, FileEntry } from '../types'
 import { MAX_TOTAL_BYTES } from '../types'
 import { emptyAssetSink, inlineAssets, type AssetSink } from './assets'
+import { applyBundle, bundleModules, findModuleEntry, isModuleProject, type BundleRuntime, type Compiler } from './bundle'
 import { byteLength } from './bytes'
 import { expandIcons, type ExpandedIcons } from './icons'
 import { buildShell, CARRY_KEY, collectPages, localPageLinks, pageRoute, type PageUnit, type ShellPage } from './pages'
@@ -29,6 +30,19 @@ export interface AssembleResult {
   missing: string[]
   /** 语法就不通的脚本文件：驱动修复轮（见 index.ts），也是"看起来生成了、其实一打开就报错"的唯一拦截点 */
   broken: string[]
+}
+
+/**
+ * 组装依赖的两个外部能力，都由调用方注入。
+ *
+ * 转译器（sucrase）在浏览器里是懒加载的（见 src/lib/react-preview.ts），在 Node 里是
+ * 直接 import 的；React 运行时同理（浏览器 `?raw`、Node 读 node_modules）。
+ * 把它做成参数而不是模块级单例，是为了让 `assemble` 保持纯函数 —— 现有的一堆单测
+ * 调 `assemble(files)` 时不传任何东西，走的仍然是原来的原生路径。
+ */
+export interface AssembleOptions {
+  compile?: Compiler
+  runtime?: BundleRuntime
 }
 
 /**
@@ -475,7 +489,86 @@ function pushSyntaxChecks(files: Map<string, FileEntry>, checks: Check[], broken
   }
 }
 
-export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResult {
+/**
+ * 模块工程（React / TSX）的打包分支。
+ *
+ * 返回 null 表示"这不是模块工程"，调用方继续走原来的内联路径 —— 老项目一个字节都不会变。
+ * 失败时**不**退回内联：一份没被打包的 JSX 塞进文档只会白屏，不如把编译错误直接画在屏幕上，
+ * 同时把失败文件列进 `broken`，让修复轮去补。
+ */
+function tryBundle(
+  input: FileEntry[],
+  entryFile: FileEntry,
+  options: AssembleOptions,
+): { content: string; checks: Check[]; broken: string[]; runtimeBytes: number } | null {
+  if (!isModuleProject(input)) return null
+
+  const entry = findModuleEntry(input, entryFile.content)
+  if (!entry) {
+    return {
+      content: entryFile.content,
+      checks: [
+        {
+          id: 'bundle',
+          label: '模块入口',
+          ok: false,
+          level: 'block',
+          detail: '是 JSX/TSX 工程，但入口 HTML 里没有 <script type="module" src="...">，也没找到 src/main',
+        },
+      ],
+      broken: [],
+      runtimeBytes: 0,
+    }
+  }
+
+  if (!options.compile || !options.runtime) {
+    return {
+      content: entryFile.content,
+      checks: [
+        {
+          id: 'bundle',
+          label: '模块打包',
+          ok: false,
+          level: 'block',
+          detail: '当前环境没有可用的打包器（浏览器端需要懒加载 sucrase 与 React 运行时）',
+        },
+      ],
+      broken: [],
+      runtimeBytes: 0,
+    }
+  }
+
+  const result = bundleModules(input, entry, options.compile, options.runtime)
+  if (!result.ok) {
+    const detail = result.issues
+      .slice(0, 3)
+      .map((issue) => `${issue.path}：${issue.message}`)
+      .join('；')
+    return {
+      content: `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"></head><body>${result.script}</body></html>`,
+      checks: [{ id: 'bundle', label: '模块打包', ok: false, level: 'block', detail }],
+      broken: [...new Set(result.issues.map((issue) => issue.path))],
+      runtimeBytes: 0,
+    }
+  }
+
+  return {
+    content: applyBundle(entryFile.content, result),
+    checks: [
+      {
+        id: 'bundle',
+        label: '模块打包',
+        ok: true,
+        level: 'block',
+        detail: `${result.modules.length} 个模块已打包（入口 ${entry.module}，React 运行时 ${(result.runtimeBytes / 1024).toFixed(0)} KB）`,
+      },
+    ],
+    broken: [],
+    runtimeBytes: result.runtimeBytes,
+  }
+}
+
+export function assemble(input: FileEntry[], tweak?: DesignTweak, options: AssembleOptions = {}): AssembleResult {
   const files = new Map<string, FileEntry>()
   for (const file of input) files.set(file.path, file)
 
@@ -504,7 +597,22 @@ export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResul
 
   checks.push({ id: 'entry', label: '入口文件存在', ok: true, level: 'block', detail: entryFile.path })
 
-  let html = buildDocument(entryFile, files, tweak, sink)
+  /**
+   * React/TSX 工程先打包成"一段普通脚本 + 一段样式"，再走同一个组装管线。
+   * 打包产物里已经没有 `type="module"`，所以后面的内联、资产、图标、桥接一步都不用改。
+   */
+  const bundled = tryBundle(input, entryFile, options)
+  if (bundled) {
+    checks.push(...bundled.checks)
+    broken.push(...bundled.broken)
+  }
+
+  let html = buildDocument(
+    bundled ? { path: entryFile.path, content: bundled.content } : entryFile,
+    files,
+    tweak,
+    sink,
+  )
 
   checks.push({
     id: 'refs',
@@ -523,13 +631,20 @@ export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResul
     detail: hasStructure ? '<html> / <body> 正常' : '缺少 <html> 或 <body>，浏览器会自行补全但不保证样式',
   })
 
-  const totalBytes = byteLength(html)
+  /**
+   * 体积只算"我们自己的代码"：React 运行时是平台注入的固定开销（约 141 KB），
+   * 把它算进预算的话，一个组件多写两行就会爆掉 400 KB，而用户对此无能为力。
+   */
+  const runtimeBytes = bundled?.runtimeBytes ?? 0
+  const totalBytes = byteLength(html) - runtimeBytes
   checks.push({
     id: 'size',
     label: '体积在预算内',
     ok: totalBytes <= MAX_TOTAL_BYTES,
     level: 'warn',
-    detail: `${(totalBytes / 1024).toFixed(1)} KB / ${(MAX_TOTAL_BYTES / 1024).toFixed(0)} KB`,
+    detail:
+      `${(totalBytes / 1024).toFixed(1)} KB / ${(MAX_TOTAL_BYTES / 1024).toFixed(0)} KB` +
+      (runtimeBytes ? `（另有平台注入的 React 运行时 ${(runtimeBytes / 1024).toFixed(0)} KB，不计入）` : ''),
   })
 
   const external: string[] = []
@@ -571,8 +686,10 @@ export function assemble(input: FileEntry[], tweak?: DesignTweak): AssembleResul
 
   pushAssetChecks(checks, sink)
 
-  // 语法体检：一个写到一半的字符串会让整个应用静默白屏，结构检查是看不出来的
-  pushSyntaxChecks(files, checks, broken)
+  // 语法体检：一个写到一半的字符串会让整个应用静默白屏，结构检查是看不出来的。
+  // 模块工程跳过这一步：JSX 交给 `new Function` 必然报语法错（它不认识 JSX），
+  // 那类问题由打包器在转译阶段如实报出来（见 tryBundle）。
+  if (!bundled) pushSyntaxChecks(files, checks, broken)
 
   return {
     html,

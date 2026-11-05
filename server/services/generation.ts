@@ -55,6 +55,11 @@ export function abortGeneration(projectId: string, mode: StopMode = 'keep'): boo
   return true
 }
 
+/** 这个项目此刻是不是正在生成：手动改文件要据此拒绝，否则改完立刻被模型覆盖。 */
+export function isGenerating(projectId: string): boolean {
+  return running.has(projectId)
+}
+
 interface AttemptResult {
   /** 成功产出（或用户主动停止后仍有产出） */
   ok: boolean
