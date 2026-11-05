@@ -4,7 +4,7 @@ import { CopyOutlined, LinkOutlined } from '@ant-design/icons'
 import type { Project } from '../../shared/types'
 import { Badge, toast } from './ui'
 import { api } from '../lib/api'
-import { timeAgo } from '../lib/format'
+import { copyText, timeAgo } from '../lib/format'
 
 const { Text } = Typography
 
@@ -66,7 +66,8 @@ export function ProjectSettingsModal({
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(shareUrl)
+      // copyText 带 execCommand 兜底：非安全上下文（局域网 IP）下 clipboard 不可用
+      await copyText(shareUrl)
       toast('分享链接已复制')
     } catch {
       toast(shareUrl)

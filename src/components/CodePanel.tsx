@@ -1,19 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Empty, Flex, Input, Modal, Popconfirm, Space, Tabs, Tooltip, Typography } from 'antd'
+import { Button, Empty, Flex, Input, Modal, Popconfirm, Tooltip, Typography } from 'antd'
 import {
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   FileAddOutlined,
-  FileTextOutlined,
   SaveOutlined,
   UndoOutlined,
 } from '@ant-design/icons'
 import type { FileChange, FileEntry } from '../../shared/types'
-import { bytes, copyText, lineCount, shortPath } from '../lib/format'
-import { highlight, langOf } from '../lib/highlight'
+import { bytes, copyText, lineCount } from '../lib/format'
 import { toast } from './ui'
 import { CodeEditor } from './CodeEditor'
+import { FileTree } from './FileTree'
 
 const { Text } = Typography
 
@@ -79,6 +78,8 @@ export function CodePanel({ files, liveFiles, followPath, focusPath, readOnly, s
   }, [merged, drafts])
 
   const active = list.find((file) => file.path === activePath) ?? null
+  /** 生成中正在写入的那个文件：树里给一个小动点，避免用户以为界面卡住了 */
+  const writing = liveFiles?.find((file) => !file.done)?.path ?? null
 
   if (!active) {
     return (
@@ -147,14 +148,15 @@ export function CodePanel({ files, liveFiles, followPath, focusPath, readOnly, s
 
   return (
     <div className="code-shell">
-      {/* 左侧文件树用 Tabs 的垂直形态：键盘方向键可在文件间移动，省掉自己维护选中态的 focus 逻辑 */}
-      <Tabs
-        tabPosition="left"
-        size="small"
-        className="code-tabs"
-        activeKey={active.path}
-        onChange={(key) => setSelected(key)}
-        tabBarExtraContent={
+      {/*
+        左侧是真正的文件树（按 / 建目录、可折叠、图标分类型），
+        不再是一列把完整路径印在页签上的平铺列表。
+      */}
+      <aside className="code-tree" aria-label="文件">
+        <div className="code-tree-head">
+          <span className="code-tree-title">文件</span>
+          <span className="code-tree-count">{list.length}</span>
+          <div className="spacer" />
           <Tooltip title="新建文件">
             <Button
               size="small"
@@ -169,119 +171,96 @@ export function CodePanel({ files, liveFiles, followPath, focusPath, readOnly, s
               }}
             />
           </Tooltip>
-        }
-        items={list.map((file) => ({
-          key: file.path,
-          label: (
-            <Space size={6}>
-              <FileTextOutlined />
-              <span className="mono">{shortPath(file.path)}</span>
-              {isDirty(file.path) ? <span className="code-dirty" title="有未保存的改动" /> : null}
-            </Space>
-          ),
-          children: (
-            <div className="code-pane">
-              <Flex className="code-head" align="center" gap={8}>
-                <Text className="mono" ellipsis>
-                  {file.path}
-                </Text>
-                <div className="spacer" />
-                <Text type="secondary" style={{ fontSize: 11.5 }} className="code-meta">
-                  {lineCount(buffer)} 行 · {bytes(new Blob([buffer]).size)}
-                </Text>
-                {isEditing ? (
-                  <>
-                    <Button
-                      size="small"
-                      type="text"
-                      icon={<UndoOutlined />}
-                      disabled={saving}
-                      onClick={() => stopEditing(file.path)}
-                    >
-                      放弃
-                    </Button>
-                    <Tooltip title="Ctrl / ⌘ + S">
-                      <Button
-                        size="small"
-                        type={isDirty(file.path) ? 'primary' : 'text'}
-                        icon={<SaveOutlined />}
-                        loading={saving}
-                        disabled={!isDirty(file.path)}
-                        onClick={() => void save()}
-                      >
-                        保存
-                      </Button>
-                    </Tooltip>
-                  </>
-                ) : (
-                  <>
-                    <Button
-                      size="small"
-                      type="text"
-                      icon={<CopyOutlined />}
-                      onClick={async () => {
-                        await copyText(buffer)
-                        toast('已复制')
-                      }}
-                    >
-                      复制
-                    </Button>
-                    <Button
-                      size="small"
-                      type="text"
-                      icon={<EditOutlined />}
-                      disabled={readOnly}
-                      title={readOnly ? '生成中不能改文件' : undefined}
-                      onClick={() => {
-                        setDrafts((prev) => (prev[file.path] !== undefined ? prev : { ...prev, [file.path]: file.content }))
-                        setEditing((prev) => (prev.includes(file.path) ? prev : [...prev, file.path]))
-                      }}
-                    >
-                      编辑
-                    </Button>
-                  </>
-                )}
-                <Popconfirm
-                  title={`删除 ${file.path}？`}
-                  description="会立即生成一个新版本，可以回滚。"
-                  okText="删除"
-                  okButtonProps={{ danger: true }}
-                  cancelText="取消"
-                  onConfirm={() => void remove(file.path)}
-                  disabled={readOnly}
+        </div>
+        <div className="code-tree-body">
+          <FileTree
+            paths={list.map((file) => file.path)}
+            activePath={active.path}
+            onSelect={setSelected}
+            dirtyPaths={dirtyPaths}
+            writingPath={writing}
+          />
+        </div>
+      </aside>
+
+      <div className="code-pane">
+        <Flex className="code-head" align="center" gap={8}>
+          <Text className="mono" ellipsis>
+            {active.path}
+          </Text>
+          <div className="spacer" />
+          <Text type="secondary" style={{ fontSize: 11.5 }} className="code-meta">
+            {lineCount(buffer)} 行 · {bytes(new Blob([buffer]).size)}
+          </Text>
+          {isEditing ? (
+            <>
+              <Button size="small" type="text" icon={<UndoOutlined />} disabled={saving} onClick={() => stopEditing(active.path)}>
+                放弃
+              </Button>
+              <Tooltip title="Ctrl / ⌘ + S">
+                <Button
+                  size="small"
+                  type={isDirty(active.path) ? 'primary' : 'text'}
+                  icon={<SaveOutlined />}
+                  loading={saving}
+                  disabled={!isDirty(active.path)}
+                  onClick={() => void save()}
                 >
-                  <Button size="small" type="text" danger aria-label="删除文件" icon={<DeleteOutlined />} disabled={readOnly} />
-                </Popconfirm>
-              </Flex>
+                  保存
+                </Button>
+              </Tooltip>
+            </>
+          ) : (
+            <>
+              <Button
+                size="small"
+                type="text"
+                icon={<CopyOutlined />}
+                onClick={async () => {
+                  await copyText(buffer)
+                  toast('已复制')
+                }}
+              >
+                复制
+              </Button>
+              <Button
+                size="small"
+                type="text"
+                icon={<EditOutlined />}
+                disabled={readOnly}
+                title={readOnly ? '生成中不能改文件' : undefined}
+                onClick={() => {
+                  setDrafts((prev) => (prev[active.path] !== undefined ? prev : { ...prev, [active.path]: active.content }))
+                  setEditing((prev) => (prev.includes(active.path) ? prev : [...prev, active.path]))
+                }}
+              >
+                编辑
+              </Button>
+            </>
+          )}
+          <Popconfirm
+            title={`删除 ${active.path}？`}
+            description="会立即生成一个新版本，可以回滚。"
+            okText="删除"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            onConfirm={() => void remove(active.path)}
+            disabled={readOnly}
+          >
+            <Button size="small" type="text" danger aria-label="删除文件" icon={<DeleteOutlined />} disabled={readOnly} />
+          </Popconfirm>
+        </Flex>
 
-              {isEditing ? (
-                <CodeEditor
-                  path={file.path}
-                  value={buffer}
-                  readOnly={readOnly}
-                  onSave={() => void save()}
-                  onChange={(next) => setDrafts((prev) => ({ ...prev, [file.path]: next }))}
-                />
-              ) : (
-                <div className="code-view">
-                  <pre>
-                    <code dangerouslySetInnerHTML={{ __html: highlightSource(buffer, file.path) }} />
-                  </pre>
-                </div>
-              )}
-            </div>
-          ),
-        }))}
-      />
+        <CodeEditor
+          path={active.path}
+          value={buffer}
+          readOnly={readOnly || !isEditing}
+          onSave={() => void save()}
+          onChange={(next) => setDrafts((prev) => ({ ...prev, [active.path]: next }))}
+        />
+      </div>
 
-      <Modal
-        open={adding}
-        title="新建文件"
-        okText="创建"
-        cancelText="取消"
-        onCancel={() => setAdding(false)}
-        onOk={createFile}
-      >
+      <Modal open={adding} title="新建文件" okText="创建" cancelText="取消" onCancel={() => setAdding(false)} onOk={createFile}>
         <Input
           autoFocus
           value={newPath}
@@ -292,9 +271,4 @@ export function CodePanel({ files, liveFiles, followPath, focusPath, readOnly, s
       </Modal>
     </div>
   )
-}
-
-/** 只读视图：走同一个高亮器，和编辑态的着色必须一致（否则"退出编辑"会闪一下变色）。 */
-function highlightSource(content: string, path: string) {
-  return highlight(content, langOf(path))
 }

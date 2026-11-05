@@ -1764,6 +1764,14 @@ pre {
   min-height: 0;
 }
 
+/* 工具栏 + 浮层的定位容器：浮层从这里往下展开，盖在预览上而不是把它挤下去 */
+.preview-bar {
+  position: relative;
+  flex: none;
+  /* 高于 iframe 所在的文档层，浮层才不会被预览吞掉 */
+  z-index: 20;
+}
+
 .preview-toolbar {
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
@@ -1875,13 +1883,19 @@ pre {
   white-space: nowrap;
 }
 
+/*
+ * 地址栏。
+ * 这里显示的是**分享页的真实地址**（可点开、可复制），不是装饰性的伪协议：
+ * 之前那串 `nucleus://preview/…` 谁也打不开、也选不中，看起来像地址栏，
+ * 实际什么也做不了 —— 用户第一反应就是"这个链接没用"。
+ */
 .url-pill {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
-  max-width: 260px;
-  padding: 3px 10px;
+  max-width: 340px;
+  padding: 2px 4px 2px 10px;
   border-radius: 999px;
   background: var(--bg-soft);
   color: var(--muted);
@@ -1893,6 +1907,47 @@ pre {
   flex: none;
   border-radius: 50%;
   background: var(--ok);
+}
+
+.url-text {
+  min-width: 0;
+  padding: 2px 1px;
+  border: 0;
+  background: none;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.url-text:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.url-copy {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.url-copy:hover {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
 }
 
 .health-pill.ok {
@@ -1907,8 +1962,74 @@ pre {
   color: var(--danger);
 }
 
+/* 面板展开时按钮跟着亮一下，让人看得出这块内容是从哪个按钮出来的。
+   antd 的 hover 态选择器优先级比这里高，鼠标停在按钮上就盖住了展开态 ——
+   而"刚点完"恰恰是鼠标一定停在按钮上的时候，所以这条必须压过它。 */
+.preview-toolbar .tool-btn.is-on,
+.preview-toolbar .health-pill.is-on {
+  background: var(--accent-soft) !important;
+}
+
+/* 展开指示：闭合朝下、展开转 180°。没有它，用户不知道这是个能点开的抽屉。 */
+.tool-caret {
+  font-size: 8px;
+  margin-left: 2px;
+  opacity: 0.72;
+  transition: transform 0.18s ease;
+}
+
+.is-on > .tool-caret,
+.is-on .tool-caret {
+  transform: rotate(180deg);
+}
+
+/*
+ * 工具栏浮层：绝对定位在工具栏下方，盖在预览上。
+ *
+ * 以前这两块是普通文档流里的元素，一展开就把 iframe 往下压 —— 用户正在看的页面
+ * 会整体跳一下，调整颜色时尤其难受（每点一次面板，预览位置就变一次）。
+ */
+.preview-pop {
+  position: absolute;
+  top: calc(100% - 2px);
+  right: 10px;
+  z-index: 30;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 16px 40px rgba(20, 20, 26, 0.16), 0 2px 6px rgba(20, 20, 26, 0.06);
+  animation: preview-pop-in 0.16s ease-out;
+}
+
+.preview-pop-tweak {
+  /* 给一个确定宽度（而不是 max-width）：内容比容器宽时 flex 才会换行，
+     否则整行会溢出到左边被裁掉，"主色"两个字看起来就剩半个 */
+  width: min(560px, calc(100% - 20px));
+}
+
+.preview-pop-checks {
+  width: min(430px, calc(100% - 20px));
+  max-height: min(56vh, 460px);
+  overflow: auto;
+}
+
+@keyframes preview-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .health-panel {
-  margin: 0 12px 10px;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .health-panel .ant-card-body {
@@ -2163,6 +2284,12 @@ pre {
   background: var(--surface);
 }
 
+/* 放进浮层里时，分割线由浮层自己的边线负责 */
+.preview-pop .tweak-panel {
+  border-bottom: 0;
+  background: transparent;
+}
+
 .tweak-sep {
   width: 1px;
   height: 16px;
@@ -2220,52 +2347,187 @@ pre {
 /* 代码 */
 
 .code-shell {
+  display: flex;
   height: 100%;
   min-height: 0;
 }
 
-.code-tabs {
-  height: 100%;
-}
-
-.code-tabs > .ant-tabs-nav {
-  width: 190px;
+/*
+ * 左侧文件树。
+ * 以前是 antd 的纵向 Tabs：每个文件一个页签，整条路径印在上面，没有目录层级，
+ * 文件超过五个就分不清谁在哪个目录里。现在按 `/` 建树、可折叠、图标分类型。
+ */
+.code-tree {
+  display: flex;
+  flex-direction: column;
+  width: 212px;
   flex: none;
-  padding: 8px 0;
-  overflow: auto;
+  min-height: 0;
   background: var(--surface);
   border-right: 1px solid var(--line);
 }
 
-.code-tabs .ant-tabs-nav-list {
-  gap: 2px;
+.code-tree-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 7px 6px 7px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--muted);
 }
 
-.code-tabs .ant-tabs-tab {
-  margin: 0 8px !important;
-  padding: 6px 9px !important;
-  border-radius: 8px;
+.code-tree-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
-.code-tabs .ant-tabs-tab:hover {
+.code-tree-count {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-soft);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-tree-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 6px 16px;
+}
+
+.tree-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.tree-row:hover {
   background: var(--bg-soft);
 }
 
-.code-tabs .ant-tabs-content-holder {
-  display: flex;
-  min-width: 0;
-  border-left: 0;
+.tree-row.is-on {
+  background: var(--accent-soft);
+  color: var(--on-accent-soft);
+  font-weight: 600;
 }
 
-.code-tabs .ant-tabs-content,
-.code-tabs .ant-tabs-tabpane {
-  height: 100%;
+/* 目录箭头：折叠朝右、展开朝下 */
+.tree-caret {
+  flex: none;
+  font-size: 9px;
+  color: var(--muted);
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+
+.tree-dir.is-open .tree-caret {
+  transform: rotate(0deg);
+}
+
+/* 文件行没有箭头，但要和目录名左对齐 */
+.tree-caret-space {
+  width: 9px;
+  flex: none;
+}
+
+.tree-ico {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  flex: none;
+  font-size: 12.5px;
+}
+
+/* 图标颜色按类型分：一屏里靠颜色就能认出哪几个是 html、哪几个是脚本 */
+.ico-dir {
+  color: #d8a13a;
+}
+
+.ico-html {
+  color: #e0562f;
+}
+
+.ico-css {
+  color: #2f7fd0;
+}
+
+.ico-js {
+  color: #c9a227;
+}
+
+.ico-json {
+  color: #8a8a99;
+}
+
+.ico-md {
+  color: #6f6f7c;
+}
+
+.ico-img {
+  color: #1f9d77;
+}
+
+.ico-zip {
+  color: #8d6e63;
+}
+
+.ico-plain {
+  color: var(--muted);
+}
+
+.tree-name {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 正在写入的文件：呼吸的小点，比转圈更不打扰 */
+.tree-writing {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: tree-pulse 1s ease-in-out infinite;
+}
+
+@keyframes tree-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
 }
 
 .code-pane {
   display: flex;
   flex-direction: column;
+  flex: 1;
   height: 100%;
   min-width: 0;
 }
@@ -2278,6 +2540,31 @@ pre {
   color: var(--muted);
 }
 
+/* Monaco 的容器：铺满剩余高度，滚动交给编辑器自己 */
+.code-edit {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.code-monaco {
+  position: absolute;
+  inset: 0;
+}
+
+/* 懒加载 Monaco 期间的占位，避免"面板一片空白"看起来像坏了 */
+.code-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--surface);
+}
+
+/* Monaco 起不来时的只读兜底（离线 / 产物缺失） */
 .code-view {
   flex: 1;
   min-height: 0;
@@ -2298,91 +2585,9 @@ pre {
 .code-dirty {
   width: 6px;
   height: 6px;
+  flex: none;
   border-radius: 50%;
   background: var(--accent);
-}
-
-/*
- * 编辑态：透明 textarea 叠在着色层上。
- * 两层的字体/行高/内边距/换行策略必须逐项一致 —— 差 1px 光标就会和文字错位，
- * 而这是"编辑器看起来坏了"最典型的症状。所以这些量只在这里写一次。
- */
-.code-edit {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  background: var(--code-bg);
-}
-
-.code-edit-layer {
-  position: absolute;
-  inset: 0;
-  margin: 0;
-  padding: 14px 16px 40px;
-  border: 0;
-  font-family: var(--mono);
-  font-size: 12.5px;
-  line-height: 1.65;
-  tab-size: 2;
-  white-space: pre;
-  overflow: auto;
-  overflow-wrap: normal;
-  word-break: normal;
-}
-
-.code-edit-view {
-  z-index: 0;
-  color: var(--code-ink);
-  pointer-events: none;
-  /* 滚动条只留 textarea 那一份，否则右侧会出现两条并排的杠 */
-  scrollbar-width: none;
-}
-
-.code-edit-view::-webkit-scrollbar {
-  display: none;
-}
-
-.code-edit-input {
-  z-index: 1;
-  background: transparent;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  caret-color: var(--code-ink);
-  resize: none;
-  outline: none;
-}
-
-.code-edit-input::selection {
-  background: color-mix(in srgb, var(--accent) 42%, transparent);
-}
-
-.code-edit-input::placeholder {
-  color: var(--muted);
-}
-
-.tok-com {
-  color: #7f8598;
-  font-style: italic;
-}
-
-.tok-str {
-  color: #9ad9a4;
-}
-
-.tok-key {
-  color: #a4b0ff;
-}
-
-.tok-num {
-  color: #f0b37e;
-}
-
-.tok-tag {
-  color: #7fd4e8;
-}
-
-.tok-attr {
-  color: #d6b0f7;
 }
 
 /* 版本 */
@@ -2788,8 +2993,8 @@ pre {
     padding: 0 8px;
   }
 
-  .code-tabs > .ant-tabs-nav {
-    width: 132px;
+  .code-tree {
+    width: 150px;
   }
 
   .url-pill {

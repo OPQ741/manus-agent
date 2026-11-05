@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Card, Empty, Flex, Space, Tooltip, Typography } from 'antd'
 import {
   BgColorsOutlined,
+  CaretDownFilled,
   CheckCircleFilled,
+  CopyOutlined,
   DesktopOutlined,
   ExclamationCircleFilled,
   ExpandAltOutlined,
@@ -13,6 +15,7 @@ import {
 } from '@ant-design/icons'
 import type { Check, DesignTweak } from '../../shared/types'
 import { tweakVars } from '../../shared/theme'
+import { copyText } from '../lib/format'
 import { isBridgeMessage, openExternal, watchFrame } from '../lib/preview-host'
 import { injectSeed, readSeed } from '../lib/seed'
 import { effectiveStage, STAGE_LABEL } from '../lib/run-stage'
@@ -39,6 +42,8 @@ interface Props {
   html: string
   /** 生成过程中本地现组的版本：入口文件一写完就能看，不必等整轮结束 */
   liveHtml?: string
+  /** 这个应用对外的真实地址（分享页）：预览地址栏里显示并可复制/打开 */
+  shareUrl: string
   checks: Check[]
   errors: string[]
   tweak?: DesignTweak
@@ -128,6 +133,7 @@ export function PreviewPanel({
   projectId,
   html,
   liveHtml = '',
+  shareUrl,
   checks,
   errors,
   tweak,
@@ -141,14 +147,18 @@ export function PreviewPanel({
 }: Props) {
   const [device, setDevice] = useState<Device>('desktop')
   const [nonce, setNonce] = useState(0)
-  const [showChecks, setShowChecks] = useState(false)
-  const [showTweak, setShowTweak] = useState(false)
+  /**
+   * 工具栏上最多只会展开一块面板（设计微调 / 自检）。两块同时开没有意义：
+   * 它们都在同一个位置弹出，叠在一起只会互相遮挡。
+   */
+  const [panel, setPanel] = useState<'tweak' | 'checks' | null>(null)
   const [draft, setDraft] = useState<DesignTweak>(tweak ?? {})
   const [saving, setSaving] = useState(false)
   /** 预览失去响应（多半是死循环）：只遮住预览，不动编辑器 */
   const [stalled, setStalled] = useState(false)
 
   const frameRef = useRef<HTMLIFrameElement>(null)
+  const barRef = useRef<HTMLDivElement>(null)
   const saveTimer = useRef<number | null>(null)
   const draftRef = useRef(draft)
   draftRef.current = draft
@@ -192,6 +202,28 @@ export function PreviewPanel({
     return () => window.removeEventListener('message', onMessage)
   }, [])
 
+  /**
+   * 浮层关闭：点面板外面 / 按 Esc。
+   *
+   * 刻意不用全屏遮罩：遮罩会连工具栏一起盖住，于是"再点一次自检按钮"变成了
+   * 先被遮罩吃掉、只关不开 —— 那个按钮看起来就像失灵了。
+   */
+  useEffect(() => {
+    if (!panel) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (!barRef.current?.contains(event.target as Node)) setPanel(null)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPanel(null)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [panel])
+
 
   const blocking = checks.find((check) => check.level === 'block' && !check.ok)
   const passed = checks.filter((check) => check.ok).length
@@ -203,6 +235,17 @@ export function PreviewPanel({
   /** 生成中：预览区要显示"正在搭"的过程，而不是一句"还没有可预览的内容" */
   const running = Boolean(live?.running)
   const activeFile = live?.files.find((file) => !file.done) ?? null
+  /** 地址栏只显示 `host/path`，协议头人人都有，占地方又没信息量 */
+  const prettyUrl = shareUrl.replace(/^https?:\/\//, '')
+
+  const copyShareUrl = async () => {
+    try {
+      await copyText(shareUrl)
+      toast('预览链接已复制')
+    } catch {
+      toast(shareUrl)
+    }
+  }
 
   /** 把草稿推给沙箱：只改变量、不重载文档，应用内的状态不会被打断。 */
   const applyLive = (next: DesignTweak) => {
@@ -304,7 +347,13 @@ export function PreviewPanel({
       ) : null}
 
       <div className="preview-shell">
-        <Flex className="preview-toolbar" align="center" gap={6} wrap>
+        {/*
+          工具栏和它的浮层放在同一个定位容器里：
+          浮层绝对定位在工具栏下方，盖住预览顶部 —— 展开它不会把 iframe 挤小，
+          页面不会在"看效果"的时候跳一下。
+        */}
+        <div className="preview-bar" ref={barRef}>
+          <Flex className="preview-toolbar" align="center" gap={6} wrap>
           {/*
             设备切换不用 antd 的 primary 按钮：实心主色块会把图标整个吞掉
             （蓝底蓝描边，看不清是电脑还是手机）。这里改成浅主色底 + 主色图标，
@@ -326,11 +375,26 @@ export function PreviewPanel({
             ))}
           </div>
 
+          {/*
+            这是真的地址栏，不是装饰：左边是分享页的真实地址（点开就在新标签页里跑），
+            右边一个复制按钮。以前的 `nucleus://preview/…` 是一段谁也打不开、
+            也选不中的假协议 —— 看起来像地址栏，实际什么也做不了。
+          */}
           <div className="url-pill">
             <span className="dot" />
-            <Text className="mono" style={{ fontSize: 11.5 }} ellipsis>
-              nucleus://preview/{projectId}
-            </Text>
+            <button
+              type="button"
+              className="url-text mono"
+              title={`在新标签页打开 ${shareUrl}`}
+              onClick={() => window.open(shareUrl, '_blank', 'noopener,noreferrer')}
+            >
+              {prettyUrl}
+            </button>
+            <Tooltip title="复制预览链接">
+              <button type="button" className="url-copy" aria-label="复制预览链接" onClick={() => void copyShareUrl()}>
+                <CopyOutlined />
+              </button>
+            </Tooltip>
           </div>
 
           <div className="spacer" />
@@ -339,13 +403,15 @@ export function PreviewPanel({
             <Button
               size="small"
               type="text"
-              className={`tool-btn${showTweak ? ' is-on' : ''}`}
+              className={`tool-btn${panel === 'tweak' ? ' is-on' : ''}`}
               aria-label="设计微调"
-              aria-expanded={showTweak}
+              aria-expanded={panel === 'tweak'}
               icon={<BgColorsOutlined />}
-              onClick={() => setShowTweak((value) => !value)}
+              onClick={() => setPanel((value) => (value === 'tweak' ? null : 'tweak'))}
             >
               设计
+              {/* 展开方向要能看见：没有这个箭头，用户不知道它是"能点开的面板" */}
+              <CaretDownFilled className="tool-caret" />
             </Button>
           </Tooltip>
 
@@ -354,12 +420,13 @@ export function PreviewPanel({
               <Button
                 size="small"
                 type="text"
-                className={`health-pill ${health}`}
-                aria-expanded={showChecks}
-                onClick={() => setShowChecks((value) => !value)}
+                className={`health-pill ${health}${panel === 'checks' ? ' is-on' : ''}`}
+                aria-expanded={panel === 'checks'}
+                onClick={() => setPanel((value) => (value === 'checks' ? null : 'checks'))}
                 icon={failed > 0 || warned > 0 ? <ExclamationCircleFilled /> : <CheckCircleFilled />}
               >
                 {healthLabel}
+                <CaretDownFilled className="tool-caret" />
               </Button>
             </Tooltip>
           ) : null}
@@ -388,12 +455,19 @@ export function PreviewPanel({
           </div>
         </Flex>
 
-        {showTweak ? (
-          <TweakPanel tweak={draft} supportsTokens={supportsTokens} saving={saving} onChange={change} onReset={reset} />
-        ) : null}
+          {/*
+            两块面板都浮在预览之上（absolute + 阴影），不参与布局：
+            展开/收起时 iframe 不会被挤动，正在看的页面也不会跳一下。
+          */}
+          {panel === 'tweak' ? (
+            <div className="preview-pop preview-pop-tweak" role="dialog" aria-label="设计微调">
+              <TweakPanel tweak={draft} supportsTokens={supportsTokens} saving={saving} onChange={change} onReset={reset} />
+            </div>
+          ) : null}
 
-        {showChecks && checks.length > 0 ? (
-          <Card
+          {panel === 'checks' && checks.length > 0 ? (
+            <div className="preview-pop preview-pop-checks" role="dialog" aria-label="自检结果">
+              <Card
             size="small"
             className="health-panel"
             title={
@@ -455,8 +529,10 @@ export function PreviewPanel({
                 </div>
               ))}
             </Space>
-          </Card>
-        ) : null}
+              </Card>
+            </div>
+          ) : null}
+        </div>
 
         {html || liveHtml ? (
           <>

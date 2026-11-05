@@ -37,6 +37,7 @@ import { VersionPanel } from '../components/VersionPanel'
 import { Badge, toast } from '../components/ui'
 import { ApiError, api, generate } from '../lib/api'
 import { explainError } from '../lib/errors'
+import { copyText } from '../lib/format'
 import { readModelChoice, writeModelChoice, type ModelChoice } from '../lib/model-prefs'
 import { useOnline } from '../lib/online'
 import { readChatWidth, writeChatWidth } from '../lib/pane-width'
@@ -667,7 +668,10 @@ export function StudioPage({ id }: { id: string }) {
               icon={<ShareAltOutlined />}
               onClick={async () => {
                 try {
-                  await navigator.clipboard.writeText(shareUrl)
+                  // 走 copyText 而不是裸 navigator.clipboard：后者只在安全上下文可用，
+                  // 用局域网 IP 打开工作台（http://192.168.x.x）时它会静默失败 ——
+                  // 表现就是"点了分享，什么都没复制到"。
+                  await copyText(shareUrl)
                   toast('分享链接已复制')
                 } catch {
                   toast(shareUrl)
@@ -810,6 +814,7 @@ export function StudioPage({ id }: { id: string }) {
                       projectId={id}
                       html={previewHtml}
                       liveHtml={bundledHtml || livePreviewHtml}
+                      shareUrl={shareUrl}
                       checks={project.checks}
                       errors={runtimeErrors}
                       tweak={project.tweak}
