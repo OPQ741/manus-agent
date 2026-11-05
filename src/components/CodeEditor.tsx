@@ -29,17 +29,25 @@ type MonacoKit = {
   languageOf: (path: string) => string
   THEME_DARK: string
   THEME_LIGHT: string
+  MONO_STACK: string
 }
 
 /** 全局只加载一次：即使来回切页签，也不会重复下载/重复 defineTheme。 */
 let loader: Promise<MonacoKit> | null = null
 
 function loadMonaco(): Promise<MonacoKit> {
-  loader ??= import('../lib/monaco-env').catch((error: unknown) => {
-    // 加载失败不缓存 rejection：下次进代码页还能再试一次
-    loader = null
-    throw error
-  })
+  loader ??= import('../lib/monaco-env')
+    // 等 Shiki 语法就绪再建编辑器：tokenizer 是后挂上去的，先建编辑器会闪一下纯色再着色。
+    // 内部已经把失败吞成降级（Monaco 自带主题），所以这里不会因为语法装载失败而卡住。
+    .then(async (module) => {
+      await module.ready
+      return module
+    })
+    .catch((error: unknown) => {
+      // 加载失败不缓存 rejection：下次进代码页还能再试一次
+      loader = null
+      throw error
+    })
   return loader
 }
 
@@ -91,12 +99,10 @@ export function CodeEditor({ value, path, onChange, onSave, readOnly }: Props) {
     if (!kit || !hostRef.current) return
     const { monaco } = kit
     const model = ensureModel(kit, modelsRef.current, path, value)
-    // Monaco 要拿真实字体名做字符宽度测量，`var(--mono)` 这种写法它读不懂
-    const monoFont = getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'monospace'
     const created = monaco.editor.create(hostRef.current, {
       model,
       theme: dark ? kit.THEME_DARK : kit.THEME_LIGHT,
-      fontFamily: monoFont,
+      fontFamily: kit.MONO_STACK,
       fontSize: 12.5,
       lineHeight: 20,
       lineNumbers: 'on',
